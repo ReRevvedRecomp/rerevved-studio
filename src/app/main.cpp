@@ -24,7 +24,7 @@ void DropCallback(GLFWwindow* window, int count, const char** paths)
         glfwGetWindowUserPointer(window));
 
     for (int index = 0; index < count; ++index)
-        application->OpenPath(std::filesystem::path(paths[index]));
+        (void)application->OpenPath(std::filesystem::path(paths[index]));
 }
 
 } // namespace
@@ -67,37 +67,39 @@ int main(int argc, char** argv)
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    rerevved::studio::Application application;
-    glfwSetWindowUserPointer(window, &application);
-    glfwSetDropCallback(window, DropCallback);
-    for (int index = 1; index < argc; ++index)
     {
-        if (std::string_view(argv[index]) != "--smoke-test")
-            application.OpenPath(std::filesystem::path(argv[index]));
-    }
+        rerevved::studio::Application application;
+        glfwSetWindowUserPointer(window, &application);
+        glfwSetDropCallback(window, DropCallback);
+        for (int index = 1; index < argc; ++index)
+        {
+            if (std::string_view(argv[index]) != "--smoke-test")
+                (void)application.OpenPath(std::filesystem::path(argv[index]));
+        }
 
-    int rendered_frames = 0;
-    while (glfwWindowShouldClose(window) == GLFW_FALSE && !application.ShouldClose())
-    {
-        glfwPollEvents();
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+        int rendered_frames = 0;
+        while (glfwWindowShouldClose(window) == GLFW_FALSE && !application.ShouldClose())
+        {
+            glfwPollEvents();
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
 
-        application.Draw();
+            application.Draw();
 
-        ImGui::Render();
-        int width  = 0;
-        int height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
-        glViewport(0, 0, width, height);
-        glClearColor(0.055F, 0.063F, 0.078F, 1.0F);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        glfwSwapBuffers(window);
-        ++rendered_frames;
-        if (smoke_test && rendered_frames == 1)
-            break;
+            ImGui::Render();
+            int width  = 0;
+            int height = 0;
+            glfwGetFramebufferSize(window, &width, &height);
+            glViewport(0, 0, width, height);
+            glClearColor(0.055F, 0.063F, 0.078F, 1.0F);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+            glfwSwapBuffers(window);
+            ++rendered_frames;
+            if (smoke_test && rendered_frames == 1)
+                break;
+        }
     }
 
     ImGui_ImplOpenGL3_Shutdown();

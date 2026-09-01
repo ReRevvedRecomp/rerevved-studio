@@ -34,6 +34,10 @@ FileKind ClassifyFile(const std::filesystem::path& path)
         return FileKind::bik_video;
     if (extension == ".mp3")
         return FileKind::mp3_audio;
+    if (extension == ".nif")
+        return FileKind::nif_container;
+    if (extension == ".map")
+        return FileKind::map_record;
     return FileKind::unknown;
 }
 
@@ -51,6 +55,10 @@ std::string_view FileKindName(FileKind kind)
             return "Bink video";
         case FileKind::mp3_audio:
             return "MP3 audio";
+        case FileKind::nif_container:
+            return "Gamebryo NIF";
+        case FileKind::map_record:
+            return "Xbox DLC map";
         case FileKind::unknown:
             return "Unknown";
     }

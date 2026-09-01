@@ -23,7 +23,12 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
     GIT_TAG fd13a1e8923a0a7077b404fc36fd063b25a0c0b5
 )
-FetchContent_MakeAvailable(glfw imgui)
+FetchContent_Declare(
+    dr_libs
+    GIT_REPOSITORY https://github.com/mackron/dr_libs.git
+    GIT_TAG 5690d4671d7ad07ae6021756d7222eb159745f06
+)
+FetchContent_MakeAvailable(glfw imgui dr_libs)
 
 find_package(OpenGL REQUIRED)
 
@@ -41,19 +46,36 @@ target_include_directories(rerevved_studio_imgui PUBLIC
 )
 target_link_libraries(rerevved_studio_imgui PUBLIC glfw OpenGL::GL)
 
+add_library(rerevved_studio_dr_mp3 STATIC src/third_party/dr_mp3.cpp)
+target_include_directories(rerevved_studio_dr_mp3 SYSTEM PRIVATE ${dr_libs_SOURCE_DIR})
+
 add_library(rerevved_studio_core STATIC
+    src/core/dds_document.cpp
     src/core/dds_metadata.cpp
     src/core/file_inspection.cpp
     src/core/file_kind.cpp
+    src/core/fpk_document.cpp
     src/core/fpk_extraction.cpp
     src/core/fpk_index.cpp
+    src/core/gfx_document.cpp
+    src/core/map_document.cpp
+    src/core/mp3_document.cpp
+    src/core/nif_document.cpp
 )
 target_include_directories(rerevved_studio_core PUBLIC api)
+target_include_directories(rerevved_studio_core SYSTEM PRIVATE ${dr_libs_SOURCE_DIR})
+target_link_libraries(rerevved_studio_core PRIVATE rerevved_studio_dr_mp3)
 
 add_executable(rerevved-studio
     src/app/application.cpp
+    src/app/archive_explorer.cpp
+    src/app/dds_viewer.cpp
+    src/app/gfx_inspector.cpp
     src/app/inspection_format.cpp
+    src/app/map_preview.cpp
     src/app/main.cpp
+    src/app/mp3_preview.cpp
+    src/app/nif_inspector.cpp
 )
 target_include_directories(rerevved-studio PRIVATE src/app)
 target_link_libraries(rerevved-studio PRIVATE

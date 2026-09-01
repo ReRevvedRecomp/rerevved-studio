@@ -14,6 +14,8 @@ enum class FileKind
     gfx_movie,
     bik_video,
     mp3_audio,
+    nif_container,
+    map_record,
 };
 
 [[nodiscard]] FileKind         ClassifyFile(const std::filesystem::path& path);
