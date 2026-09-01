@@ -9,6 +9,8 @@
 #include "map_document.h"
 #include "mp3_document.h"
 #include "nif_document.h"
+#include "nif_model.h"
+#include "nif_preview.h"
 
 #include <array>
 #include <filesystem>
@@ -33,15 +35,18 @@ UpdateSelectionAfterAssetClose(std::size_t asset_count, std::optional<std::size_
 
 struct AssetDocument
 {
-    FileInspection             inspection;
-    std::optional<FpkDocument> fpk;
-    ArchiveExplorerState       archive;
-    std::optional<DdsDocument> dds;
-    std::optional<GfxDocument> gfx;
-    std::optional<MapDocument> map;
-    std::optional<Mp3Document> mp3;
-    std::optional<NifDocument> nif;
-    std::string                document_error;
+    FileInspection               inspection;
+    std::optional<FpkDocument>   fpk;
+    ArchiveExplorerState         archive;
+    std::optional<DdsDocument>   dds;
+    std::optional<GfxDocument>   gfx;
+    std::optional<MapDocument>   map;
+    std::optional<Mp3Document>   mp3;
+    std::optional<NifDocument>   nif;
+    std::optional<NifModel>      nif_model;
+    std::optional<NifModelError> nif_model_error;
+    NifPreviewState              nif_preview;
+    std::string                  document_error;
 };
 
 class Application

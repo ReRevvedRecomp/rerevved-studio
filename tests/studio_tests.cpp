@@ -12,10 +12,14 @@
 #include "map_document.h"
 #include "mp3_document.h"
 #include "nif_document.h"
+#include "nif_model.h"
+#include "nif_preview.h"
 #include "synthetic_mp3.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -24,8 +28,11 @@
 #include <iterator>
 #include <limits>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -748,12 +755,19 @@ SyntheticNif MakeNif()
 struct SyntheticGeometryNif
 {
     std::vector<std::byte> bytes;
+    std::size_t            block_size_offset               = 0;
+    std::size_t            block_payload_offset            = 0;
     std::size_t            vertex_count_offset             = 0;
+    std::size_t            vertex_positions_offset         = 0;
     std::size_t            data_flags_offset               = 0;
+    std::size_t            has_normals_offset              = 0;
+    std::size_t            normal_vectors_offset           = 0;
     std::size_t            additional_data_offset          = 0;
     std::size_t            triangle_count_offset           = 0;
+    std::size_t            triangle_indices_offset         = 0;
     std::size_t            match_group_count_offset        = 0;
     std::size_t            match_group_vertex_count_offset = 0;
+    std::size_t            match_group_selectors_offset    = 0;
 };
 
 SyntheticGeometryNif MakeGeometryNif(bool populated)
@@ -766,11 +780,14 @@ SyntheticGeometryNif MakeGeometryNif(bool populated)
     payload.push_back(std::byte{ 0xA1 });
     payload.push_back(std::byte{ 0xB2 });
     payload.push_back(populated ? std::byte{ 0xFF } : std::byte{ 0 });
+    result.vertex_positions_offset = payload.size();
     if (populated)
         payload.insert(payload.end(), 24, std::byte{ 0 });
     result.data_flags_offset = payload.size();
     AppendU16Be(payload, populated ? 0x1001 : 0);
+    result.has_normals_offset = payload.size();
     payload.push_back(populated ? std::byte{ 2 } : std::byte{ 0 });
+    result.normal_vectors_offset = payload.size();
     if (populated)
     {
         payload.insert(payload.end(), 24, std::byte{ 0 });
@@ -793,6 +810,7 @@ SyntheticGeometryNif MakeGeometryNif(bool populated)
     AppendU16Be(payload, populated ? 1 : 0);
     AppendU32Be(payload, 7);
     payload.push_back(populated ? std::byte{ 0x7F } : std::byte{ 0 });
+    result.triangle_indices_offset = payload.size();
     if (populated)
     {
         AppendU16Be(payload, 0);
@@ -800,13 +818,18 @@ SyntheticGeometryNif MakeGeometryNif(bool populated)
         AppendU16Be(payload, 0);
     }
     result.match_group_count_offset = payload.size();
-    AppendU16Be(payload, populated ? 1 : 0);
+    AppendU16Be(payload, populated ? 2 : 0);
     result.match_group_vertex_count_offset = payload.size();
     if (populated)
     {
         AppendU16Be(payload, 2);
+        result.match_group_selectors_offset = payload.size();
         AppendU16Be(payload, 0);
+        AppendU16Be(payload, 7);
+        AppendU16Be(payload, 3);
+        AppendU16Be(payload, 5);
         AppendU16Be(payload, 1);
+        AppendU16Be(payload, 9);
     }
 
     auto&      bytes  = result.bytes;
@@ -819,19 +842,184 @@ SyntheticGeometryNif MakeGeometryNif(bool populated)
     AppendU16Be(bytes, 1);
     AppendNifSizedBytes(bytes, ByteString("NiTriShapeData"));
     AppendU16Be(bytes, 0);
+    result.block_size_offset = bytes.size();
     AppendU32Be(bytes, static_cast<std::uint32_t>(payload.size()));
     AppendU32Be(bytes, 0);
     AppendU32Be(bytes, 0);
     AppendU32Be(bytes, 0);
 
     result.vertex_count_offset += bytes.size();
+    result.vertex_positions_offset += bytes.size();
     result.data_flags_offset += bytes.size();
+    result.has_normals_offset += bytes.size();
+    result.normal_vectors_offset += bytes.size();
     result.additional_data_offset += bytes.size();
     result.triangle_count_offset += bytes.size();
+    result.triangle_indices_offset += bytes.size();
     result.match_group_count_offset += bytes.size();
     result.match_group_vertex_count_offset += bytes.size();
+    result.match_group_selectors_offset += bytes.size();
+    result.block_payload_offset = bytes.size();
     bytes.insert(bytes.end(), payload.begin(), payload.end());
     AppendU32Be(bytes, 1);
+    AppendU32Be(bytes, 0);
+    return result;
+}
+
+void AppendNifF32(std::vector<std::byte>& bytes, float value)
+{
+    AppendU32Be(bytes, std::bit_cast<std::uint32_t>(value));
+}
+
+void WriteNifF32(std::vector<std::byte>& bytes, std::size_t offset, float value)
+{
+    WriteU32Be(bytes, offset, std::bit_cast<std::uint32_t>(value));
+}
+
+void AppendNifVector3(std::vector<std::byte>& bytes, float x, float y, float z)
+{
+    AppendNifF32(bytes, x);
+    AppendNifF32(bytes, y);
+    AppendNifF32(bytes, z);
+}
+
+void AppendSyntheticObjectNet(std::vector<std::byte>& bytes, std::uint32_t name_index)
+{
+    AppendU32Be(bytes, name_index);
+    AppendU32Be(bytes, 0);
+    AppendU32Be(bytes, 0xFFFFFFFF);
+}
+
+std::size_t AppendSyntheticAvObject(std::vector<std::byte>&        bytes,
+                                    std::uint32_t                  name_index,
+                                    std::span<const std::uint32_t> properties)
+{
+    AppendSyntheticObjectNet(bytes, name_index);
+    AppendU16Be(bytes, 0);
+    AppendNifVector3(bytes, 0.0F, 0.0F, 0.0F);
+    for (std::size_t index = 0; index < 9; ++index)
+        AppendNifF32(bytes, index % 4 == 0 ? 1.0F : 0.0F);
+    AppendNifF32(bytes, 1.0F);
+    AppendU32Be(bytes, static_cast<std::uint32_t>(properties.size()));
+    const auto property_reference_offset = bytes.size();
+    for (const auto property : properties)
+        AppendU32Be(bytes, property);
+    AppendU32Be(bytes, 0xFFFFFFFF);
+    return property_reference_offset;
+}
+
+struct SyntheticModelNif
+{
+    std::vector<std::byte> bytes;
+    std::size_t            root_reference_offset     = 0;
+    std::size_t            child_reference_offset    = 0;
+    std::size_t            data_reference_offset     = 0;
+    std::size_t            property_reference_offset = 0;
+    std::size_t            triangle_indices_offset   = 0;
+    std::size_t            node_transform_offset     = 0;
+    std::size_t            shape_transform_offset    = 0;
+};
+
+SyntheticModelNif MakeSyntheticModelNif()
+{
+    SyntheticModelNif result{};
+
+    std::vector<std::byte> node;
+    result.node_transform_offset = 14;
+    AppendSyntheticAvObject(node, 0, {});
+    AppendU32Be(node, 1);
+    result.child_reference_offset = node.size();
+    AppendU32Be(node, 1);
+    AppendU32Be(node, 0);
+
+    std::vector<std::byte> shape;
+    result.shape_transform_offset = 14;
+    const std::array shape_properties{ std::uint32_t{ 3 } };
+    result.property_reference_offset =
+        AppendSyntheticAvObject(shape, 1, shape_properties);
+    result.data_reference_offset = shape.size();
+    AppendU32Be(shape, 2);
+    AppendU32Be(shape, 0xFFFFFFFF);
+    AppendU32Be(shape, 0);
+    AppendU32Be(shape, 0xFFFFFFFF);
+    shape.push_back(std::byte{ 0 });
+
+    std::vector<std::byte> geometry;
+    AppendU32Be(geometry, 0);
+    AppendU16Be(geometry, 3);
+    geometry.push_back(std::byte{ 0 });
+    geometry.push_back(std::byte{ 0 });
+    geometry.push_back(std::byte{ 1 });
+    AppendNifVector3(geometry, 0.0F, 0.0F, 0.0F);
+    AppendNifVector3(geometry, 1.0F, 0.0F, 0.0F);
+    AppendNifVector3(geometry, 0.0F, 1.0F, 0.0F);
+    AppendU16Be(geometry, 0);
+    geometry.push_back(std::byte{ 1 });
+    AppendNifVector3(geometry, 1.0F, 0.0F, 0.0F);
+    AppendNifVector3(geometry, 0.0F, 1.0F, 0.0F);
+    AppendNifVector3(geometry, 0.0F, 0.0F, 1.0F);
+    AppendNifVector3(geometry, 0.5F, 0.5F, 0.0F);
+    AppendNifF32(geometry, 1.0F);
+    geometry.push_back(std::byte{ 0 });
+    AppendU16Be(geometry, 0);
+    AppendU32Be(geometry, 0xFFFFFFFF);
+    AppendU16Be(geometry, 1);
+    AppendU32Be(geometry, 3);
+    geometry.push_back(std::byte{ 1 });
+    result.triangle_indices_offset = geometry.size();
+    AppendU16Be(geometry, 0);
+    AppendU16Be(geometry, 1);
+    AppendU16Be(geometry, 2);
+    AppendU16Be(geometry, 0);
+
+    std::vector<std::byte> material;
+    AppendSyntheticObjectNet(material, 2);
+    AppendNifVector3(material, 1.0F, 1.0F, 1.0F);
+    AppendNifVector3(material, 1.0F, 1.0F, 1.0F);
+    AppendNifVector3(material, 0.0F, 0.0F, 0.0F);
+    AppendNifVector3(material, 0.0F, 0.0F, 0.0F);
+    AppendNifF32(material, 1.0F);
+    AppendNifF32(material, 1.0F);
+
+    auto&      bytes  = result.bytes;
+    const auto header = ByteString("Gamebryo File Format, Version 20.3.0.9\n");
+    bytes.insert(bytes.end(), header.begin(), header.end());
+    AppendU32Le(bytes, 0x14030009);
+    bytes.push_back(std::byte{ 0 });
+    AppendU32Le(bytes, 0);
+    AppendU32Le(bytes, 4);
+    AppendU16Be(bytes, 4);
+    AppendNifSizedBytes(bytes, ByteString("NiNode"));
+    AppendNifSizedBytes(bytes, ByteString("NiTriShape"));
+    AppendNifSizedBytes(bytes, ByteString("NiTriShapeData"));
+    AppendNifSizedBytes(bytes, ByteString("NiMaterialProperty"));
+    AppendU16Be(bytes, 0);
+    AppendU16Be(bytes, 1);
+    AppendU16Be(bytes, 2);
+    AppendU16Be(bytes, 3);
+    AppendU32Be(bytes, static_cast<std::uint32_t>(node.size()));
+    AppendU32Be(bytes, static_cast<std::uint32_t>(shape.size()));
+    AppendU32Be(bytes, static_cast<std::uint32_t>(geometry.size()));
+    AppendU32Be(bytes, static_cast<std::uint32_t>(material.size()));
+    AppendU32Be(bytes, 3);
+    AppendU32Be(bytes, 17);
+    AppendNifSizedBytes(bytes, ByteString("SyntheticRoot"));
+    AppendNifSizedBytes(bytes, ByteString("SyntheticTriangle"));
+    AppendNifSizedBytes(bytes, ByteString("SyntheticMaterial"));
+    AppendU32Be(bytes, 0);
+
+    result.child_reference_offset += bytes.size();
+    result.node_transform_offset += bytes.size();
+    bytes.insert(bytes.end(), node.begin(), node.end());
+    result.property_reference_offset += bytes.size();
+    result.data_reference_offset += bytes.size();
+    result.shape_transform_offset += bytes.size();
+    bytes.insert(bytes.end(), shape.begin(), shape.end());
+    result.triangle_indices_offset += bytes.size();
+    bytes.insert(bytes.end(), geometry.begin(), geometry.end());
+    bytes.insert(bytes.end(), material.begin(), material.end());
+    AppendU32Be(bytes, 1);
+    result.root_reference_offset = bytes.size();
     AppendU32Be(bytes, 0);
     return result;
 }
@@ -1755,13 +1943,23 @@ void TestNifGeometryInventory()
                    data.has_vertices == 0xFF && data.data_flags == 0x1001 &&
                    data.has_normals == 2,
                "NiTriShapeData vertex inventory and raw presence values are preserved");
+        Expect(data.vertex_positions ==
+                       std::vector<std::array<float, 3>>(2, std::array{ 0.0F, 0.0F, 0.0F }) &&
+                   data.normal_vectors ==
+                       std::vector<std::array<float, 3>>(2, std::array{ 0.0F, 0.0F, 0.0F }),
+               "NiTriShapeData positions and normals are retained in source order");
         Expect(data.bound_center == std::array{ 1.0F, 2.0F, 3.0F } &&
                    data.bound_radius == -4.0F && data.has_vertex_colors == 0x80 &&
                    data.consistency_flags == 0xBEEF && data.additional_data == 0xFFFFFFFF,
                "NiTriShapeData bounds, flags, and additional-data reference are preserved");
         Expect(data.triangle_count == 1 && data.triangle_point_count == 7 &&
-                   data.has_triangles == 0x7F && data.match_group_count == 1,
+                   data.has_triangles == 0x7F && data.match_group_count == 2,
                "NiTriShapeData triangle inventory is preserved without semantic rejection");
+        Expect(data.triangles ==
+                       std::vector<std::array<std::uint16_t, 3>>{ { 0, 1, 0 } } &&
+                   data.normal_sharing_groups ==
+                       std::vector<std::vector<std::uint16_t>>{ { 0, 7 }, { 5, 1, 9 } },
+               "triangle and above-vertex normal-sharing selectors remain ordered and exact");
     }
 
     const auto empty        = MakeGeometryNif(false);
@@ -1769,15 +1967,20 @@ void TestNifGeometryInventory()
     Expect(empty_result && empty_result->tri_shape_data.size() == 1 &&
                empty_result->tri_shape_data[0].vertex_count == 0 &&
                empty_result->tri_shape_data[0].triangle_count == 0 &&
-               empty_result->tri_shape_data[0].match_group_count == 0,
-           "empty NiTriShapeData arrays are accepted");
+               empty_result->tri_shape_data[0].match_group_count == 0 &&
+               empty_result->tri_shape_data[0].vertex_positions.empty() &&
+               empty_result->tri_shape_data[0].normal_vectors.empty() &&
+               empty_result->tri_shape_data[0].triangles.empty() &&
+               empty_result->tri_shape_data[0].normal_sharing_groups.empty(),
+           "absent NiTriShapeData arrays produce empty retained containers");
 
     auto tangent_flag_without_normals = empty.bytes;
     WriteU16Be(tangent_flag_without_normals, empty.data_flags_offset, 0x1000);
     const auto tangent_flag_result = ParseNifDocument(tangent_flag_without_normals);
     Expect(tangent_flag_result && tangent_flag_result->tri_shape_data.size() == 1 &&
-               tangent_flag_result->tri_shape_data[0].has_normals == 0,
-           "NiTriShapeData tangent flag does not imply arrays without normals");
+               tangent_flag_result->tri_shape_data[0].has_normals == 0 &&
+               tangent_flag_result->tri_shape_data[0].normal_vectors.empty(),
+           "NiTriShapeData tangent flag does not create retained arrays without normals");
 
     bool all_truncations_rejected = true;
     for (std::size_t size = 0; size < populated.bytes.size(); ++size)
@@ -1786,11 +1989,38 @@ void TestNifGeometryInventory()
     Expect(all_truncations_rejected,
            "every truncated NiTriShapeData container prefix is rejected");
 
+    for (const auto [array_offset, retained_bytes, label] :
+         std::array{
+             std::tuple{ populated.vertex_positions_offset, std::size_t{ 23 }, "positions" },
+             std::tuple{ populated.normal_vectors_offset, std::size_t{ 23 }, "normals" },
+             std::tuple{ populated.triangle_indices_offset, std::size_t{ 5 }, "triangles" },
+             std::tuple{ populated.match_group_selectors_offset,
+                         std::size_t{ 3 },
+                         "normal-sharing selectors" },
+         })
+    {
+        auto truncated_array = populated.bytes;
+        WriteU32Be(truncated_array,
+                   populated.block_size_offset,
+                   static_cast<std::uint32_t>(array_offset - populated.block_payload_offset +
+                                              retained_bytes));
+        const auto result = ParseNifDocument(truncated_array);
+        Expect(!result && result.error() == NifDocumentError::invalid_layout,
+               std::string("truncated NiTriShapeData ") + label + " are rejected safely");
+    }
+
     auto oversized_vertices = populated.bytes;
     WriteU16Be(oversized_vertices, populated.vertex_count_offset, 0xFFFF);
     const auto vertices_result = ParseNifDocument(oversized_vertices);
     Expect(!vertices_result && vertices_result.error() == NifDocumentError::invalid_layout,
-           "oversized NiTriShapeData vertex arrays are rejected within the block");
+           "oversized NiTriShapeData vertex arrays are rejected before retention allocation");
+
+    auto oversized_normals = empty.bytes;
+    WriteU16Be(oversized_normals, empty.vertex_count_offset, 0xFFFF);
+    oversized_normals[empty.has_normals_offset] = std::byte{ 1 };
+    const auto normals_result                   = ParseNifDocument(oversized_normals);
+    Expect(!normals_result && normals_result.error() == NifDocumentError::invalid_layout,
+           "oversized NiTriShapeData normal arrays are rejected before retention allocation");
 
     auto oversized_uv_sets = populated.bytes;
     WriteU16Be(oversized_uv_sets, populated.data_flags_offset, 0x103F);
@@ -1809,7 +2039,7 @@ void TestNifGeometryInventory()
     WriteU16Be(oversized_triangles, populated.triangle_count_offset, 0xFFFF);
     const auto triangles_result = ParseNifDocument(oversized_triangles);
     Expect(!triangles_result && triangles_result.error() == NifDocumentError::invalid_layout,
-           "oversized NiTriShapeData triangle arrays are rejected within the block");
+           "oversized NiTriShapeData triangle arrays are rejected before retention allocation");
 
     auto oversized_match_group = populated.bytes;
     WriteU16Be(
@@ -1817,13 +2047,865 @@ void TestNifGeometryInventory()
     const auto match_group_result = ParseNifDocument(oversized_match_group);
     Expect(!match_group_result &&
                match_group_result.error() == NifDocumentError::invalid_layout,
-           "oversized NiTriShapeData match-group arrays are rejected within the block");
+           "oversized normal-sharing selector arrays are rejected before retention allocation");
 
     auto trailing_match_group = populated.bytes;
     WriteU16Be(trailing_match_group, populated.match_group_count_offset, 0);
     const auto trailing_result = ParseNifDocument(trailing_match_group);
     Expect(!trailing_result && trailing_result.error() == NifDocumentError::invalid_layout,
            "NiTriShapeData must consume its declared block exactly");
+}
+
+void TestSyntheticModelFixture()
+{
+    using rerevved::studio::NifDocumentError;
+    using rerevved::studio::ParseNifDocument;
+
+    const auto synthetic = MakeSyntheticModelNif();
+    Expect(synthetic.bytes == MakeSyntheticModelNif().bytes,
+           "synthetic model fixture generation is deterministic");
+
+    const auto document = ParseNifDocument(synthetic.bytes);
+    Expect(document.has_value(), "complete synthetic model fixture parses successfully");
+    if (document)
+    {
+        const std::vector<std::vector<std::byte>> expected_types{
+            ByteString("NiNode"),
+            ByteString("NiTriShape"),
+            ByteString("NiTriShapeData"),
+            ByteString("NiMaterialProperty"),
+        };
+        const std::vector<std::vector<std::byte>> expected_strings{
+            ByteString("SyntheticRoot"),
+            ByteString("SyntheticTriangle"),
+            ByteString("SyntheticMaterial"),
+        };
+        Expect(document->version == 0x14030009 && document->endian == 0 &&
+                   document->user_version == 0,
+               "synthetic model fixture uses the supported Gamebryo profile");
+        Expect(document->block_types == expected_types && document->blocks.size() == 4 &&
+                   document->blocks[0].type_index == 0 &&
+                   document->blocks[1].type_index == 1 &&
+                   document->blocks[2].type_index == 2 &&
+                   document->blocks[3].type_index == 3 &&
+                   std::ranges::all_of(document->blocks, [&](const auto& block)
+                                       {
+                                           return block.type_index < document->block_types.size();
+                                       }),
+               "synthetic model block types and type indices are exact and in range");
+        Expect(document->strings == expected_strings && document->max_string_length == 17 &&
+                   document->groups.empty(),
+               "synthetic model names and empty group table are exact");
+
+        Expect(document->roots == std::vector<std::uint32_t>{ 0 } &&
+                   document->blocks[document->roots[0]].type_index == 0 &&
+                   document->nodes.size() == 1 && document->nodes[0].block_index == 0,
+               "synthetic footer root selects the NiNode block");
+        Expect(document->nodes[0].children == std::vector<std::uint32_t>{ 1 } &&
+                   document->blocks[document->nodes[0].children[0]].type_index == 1,
+               "synthetic NiNode child selects the NiTriShape block");
+        Expect(document->nodes[0].object.properties.empty() &&
+                   document->nodes[0].object.controller == 0xFFFFFFFF &&
+                   document->nodes[0].object.translation ==
+                       std::array{ 0.0F, 0.0F, 0.0F } &&
+                   document->nodes[0].object.rotation ==
+                       std::array{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F } &&
+                   document->nodes[0].object.scale == 1.0F &&
+                   document->nodes[0].effects.empty(),
+               "synthetic root retains its identity local transform and empty references");
+
+        Expect(document->tri_shapes.size() == 1 &&
+                   document->tri_shapes[0].block_index == 1 &&
+                   document->tri_shapes[0].data == 2 &&
+                   document->blocks[document->tri_shapes[0].data].type_index == 2,
+               "synthetic NiTriShape data reference selects NiTriShapeData");
+        Expect(document->tri_shapes[0].object.properties ==
+                       std::vector<std::uint32_t>{ 3 } &&
+                   document->blocks[document->tri_shapes[0].object.properties[0]].type_index ==
+                       3 &&
+                   document->blocks[3].size == 68,
+               "synthetic NiTriShape property selects the standard NiMaterialProperty block");
+        Expect(document->tri_shapes[0].object.controller == 0xFFFFFFFF &&
+                   document->tri_shapes[0].object.translation ==
+                       std::array{ 0.0F, 0.0F, 0.0F } &&
+                   document->tri_shapes[0].object.rotation ==
+                       std::array{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F } &&
+                   document->tri_shapes[0].object.scale == 1.0F &&
+                   document->tri_shapes[0].skin_instance == 0xFFFFFFFF &&
+                   document->tri_shapes[0].material.name_indices.empty() &&
+                   document->tri_shapes[0].material.active_material == -1,
+               "synthetic shape has no animation, skinning, or material-name list");
+
+        Expect(document->tri_shape_data.size() == 1 &&
+                   document->tri_shape_data[0].block_index == 2 &&
+                   document->tri_shape_data[0].vertex_count == 3 &&
+                   document->tri_shape_data[0].has_vertices == 1 &&
+                   document->tri_shape_data[0].data_flags == 0 &&
+                   document->tri_shape_data[0].has_normals == 1 &&
+                   document->tri_shape_data[0].has_vertex_colors == 0,
+               "synthetic vertex and normal presence values are retained without UVs or colors");
+        const std::vector<std::array<float, 3>> expected_positions{
+            { 0.0F, 0.0F, 0.0F },
+            { 1.0F, 0.0F, 0.0F },
+            { 0.0F, 1.0F, 0.0F },
+        };
+        const std::vector<std::array<float, 3>> expected_normals{
+            { 1.0F, 0.0F, 0.0F },
+            { 0.0F, 1.0F, 0.0F },
+            { 0.0F, 0.0F, 1.0F },
+        };
+        Expect(document->tri_shape_data[0].vertex_positions == expected_positions &&
+                   document->tri_shape_data[0].normal_vectors == expected_normals,
+               "synthetic vertex positions and normals retain their exact source order");
+        Expect(document->tri_shape_data[0].triangle_count == 1 &&
+                   document->tri_shape_data[0].triangle_point_count == 3 &&
+                   document->tri_shape_data[0].has_triangles == 1 &&
+                   document->tri_shape_data[0].match_group_count == 0,
+               "synthetic triangle presence and counts are retained without match groups");
+        Expect(document->tri_shape_data[0].triangles ==
+                       std::vector<std::array<std::uint16_t, 3>>{ { 0, 1, 2 } } &&
+                   document->tri_shape_data[0].normal_sharing_groups.empty(),
+               "synthetic triangle selectors are retained and absent groups remain empty");
+    }
+
+    const std::array triangle_indices{
+        std::byte{ 0 },
+        std::byte{ 0 },
+        std::byte{ 0 },
+        std::byte{ 1 },
+        std::byte{ 0 },
+        std::byte{ 2 },
+    };
+    Expect(std::ranges::equal(
+               std::span(synthetic.bytes).subspan(synthetic.triangle_indices_offset, 6),
+               triangle_indices),
+           "synthetic triangle indices are exactly 0, 1, and 2");
+
+    auto                 serialized_transform = synthetic.bytes;
+    constexpr std::array serialized_rotation{
+        0.0F,
+        1.0F,
+        0.0F,
+        -1.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        1.0F,
+    };
+    WriteNifF32(serialized_transform, synthetic.shape_transform_offset, 4.0F);
+    WriteNifF32(serialized_transform, synthetic.shape_transform_offset + 4, -5.0F);
+    WriteNifF32(serialized_transform, synthetic.shape_transform_offset + 8, 6.0F);
+    for (std::size_t index = 0; index < serialized_rotation.size(); ++index)
+    {
+        WriteNifF32(serialized_transform,
+                    synthetic.shape_transform_offset + 12 + index * sizeof(float),
+                    serialized_rotation[index]);
+    }
+    WriteNifF32(serialized_transform, synthetic.shape_transform_offset + 48, 2.5F);
+    const auto transformed_document = ParseNifDocument(serialized_transform);
+    Expect(transformed_document &&
+               transformed_document->tri_shapes[0].object.translation ==
+                   std::array{ 4.0F, -5.0F, 6.0F } &&
+               transformed_document->tri_shapes[0].object.rotation ==
+                   serialized_rotation &&
+               transformed_document->tri_shapes[0].object.scale == 2.5F,
+           "serialized shape translation, rotation, and scale retain exact f32 values");
+
+    bool all_truncations_rejected = true;
+    for (std::size_t size = 0; size < synthetic.bytes.size(); ++size)
+        all_truncations_rejected = all_truncations_rejected &&
+                                   !ParseNifDocument(std::span(synthetic.bytes).first(size));
+    Expect(all_truncations_rejected,
+           "every truncated synthetic model fixture prefix is rejected");
+    Expect(!ParseNifDocument(std::span(synthetic.bytes).first(synthetic.node_transform_offset + 51)) &&
+               !ParseNifDocument(std::span(synthetic.bytes).first(synthetic.shape_transform_offset + 51)),
+           "truncated node and shape transform records fail through block-bounded parsing");
+
+    for (const auto [offset, label] :
+         std::array{
+             std::pair{ synthetic.root_reference_offset, "root" },
+             std::pair{ synthetic.child_reference_offset, "child" },
+             std::pair{ synthetic.data_reference_offset, "data" },
+             std::pair{ synthetic.property_reference_offset, "property" },
+         })
+    {
+        auto corrupted = synthetic.bytes;
+        WriteU32Be(corrupted, offset, 4);
+        const auto result = ParseNifDocument(corrupted);
+        Expect(!result && result.error() == NifDocumentError::invalid_layout,
+               std::string("out-of-range synthetic ") + label + " reference is rejected");
+    }
+}
+
+void TestNifModelAssembly()
+{
+    using namespace rerevved::studio;
+
+    Expect(NifModelErrorMessage(NifModelError::scene_cycle) ==
+               "The NIF scene graph contains a cycle.",
+           "NIF model cycle message");
+    Expect(NifModelErrorMessage(NifModelError::wrong_data_block_type) ==
+               "A NiTriShape data reference does not target NiTriShapeData.",
+           "NIF model wrong-data-type message");
+    Expect(NifModelErrorMessage(NifModelError::inconsistent_geometry) ==
+               "The retained NIF geometry arrays are inconsistent.",
+           "NIF model inconsistent-geometry message");
+    Expect(NifModelErrorMessage(NifModelError::triangle_selector_out_of_range) ==
+               "A NIF triangle selector is outside the retained vertex positions.",
+           "NIF model triangle-selector message");
+    Expect(NifModelErrorMessage(NifModelError::invalid_transform) ==
+               "A NIF scene transform is non-finite or unrepresentable.",
+           "NIF model transform message");
+    Expect(NifModelErrorMessage(NifModelError::no_supported_meshes) ==
+               "The NIF scene contains no supported meshes.",
+           "NIF model no-mesh message");
+
+    const auto synthetic = MakeSyntheticModelNif();
+    const auto parsed    = ParseNifDocument(synthetic.bytes);
+    Expect(parsed.has_value(), "synthetic model parses for model assembly");
+    if (!parsed)
+        return;
+
+    const auto* positions_before = parsed->tri_shape_data[0].vertex_positions.data();
+    const auto* normals_before   = parsed->tri_shape_data[0].normal_vectors.data();
+    const auto* triangles_before = parsed->tri_shape_data[0].triangles.data();
+    const auto  model            = AssembleNifModel(*parsed);
+    Expect(model && model->meshes.size() == 1,
+           "synthetic model assembles exactly one supported mesh");
+    if (model && model->meshes.size() == 1)
+    {
+        const auto& mesh = model->meshes[0];
+        Expect(mesh.root_index == 0 &&
+                   mesh.node_path == std::vector<std::size_t>{ 0 } &&
+                   mesh.tri_shape_index == 0 && mesh.tri_shape_data_index == 0 &&
+                   mesh.material_property_blocks == std::vector<std::uint32_t>{ 3 },
+               "assembled mesh resolves its root, node path, shape, data, and material");
+        const auto& geometry = parsed->tri_shape_data[mesh.tri_shape_data_index];
+        Expect(geometry.vertex_positions.size() == 3 && geometry.normal_vectors.size() == 3 &&
+                   geometry.triangles ==
+                       std::vector<std::array<std::uint16_t, 3>>{ { 0, 1, 2 } },
+               "assembled mesh indices resolve the retained synthetic geometry");
+        Expect(geometry.vertex_positions.data() == positions_before &&
+                   geometry.normal_vectors.data() == normals_before &&
+                   geometry.triangles.data() == triangles_before,
+               "model assembly leaves document-owned geometry storage unchanged");
+        const auto transformed = ApplyNifModelTransform(
+            mesh.world_transform, geometry.vertex_positions[1]);
+        Expect(transformed && *transformed == std::array{ 1.0, 0.0, 0.0 },
+               "identity node and shape transforms preserve a retained position");
+    }
+
+    constexpr std::array rotate_z_positive{
+        0.0F,
+        1.0F,
+        0.0F,
+        -1.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        1.0F,
+    };
+    auto shape_local                             = *parsed;
+    shape_local.tri_shapes[0].object.translation = { 10.0F, 20.0F, 30.0F };
+    shape_local.tri_shapes[0].object.rotation    = rotate_z_positive;
+    shape_local.tri_shapes[0].object.scale       = 2.0F;
+    const auto normals_before_transform          = shape_local.tri_shape_data[0].normal_vectors;
+    const auto shape_local_model                 = AssembleNifModel(shape_local);
+    const auto shape_local_position              = shape_local_model
+                                                       ? ApplyNifModelTransform(
+                                                             shape_local_model->meshes[0].world_transform,
+                                                             { 1.0F, 0.0F, 0.0F })
+                                                       : std::expected<std::array<double, 3>, NifModelError>(
+                                                             std::unexpected(
+                                                                 NifModelError::invalid_transform));
+    Expect(shape_local_position &&
+               *shape_local_position == std::array{ 10.0, 22.0, 30.0 } &&
+               shape_local.tri_shape_data[0].normal_vectors == normals_before_transform,
+           "shape-local translation, rotation, and scale affect positions without changing normals");
+
+    auto parentless             = shape_local;
+    parentless.roots            = { 1 };
+    const auto parentless_model = AssembleNifModel(parentless);
+    Expect(parentless_model && parentless_model->meshes.size() == 1 &&
+               parentless_model->meshes[0].node_path.empty() &&
+               ApplyNifModelTransform(parentless_model->meshes[0].world_transform,
+                                      { 1.0F, 0.0F, 0.0F }) ==
+                   std::expected<std::array<double, 3>, NifModelError>(
+                       std::array{ 10.0, 22.0, 30.0 }),
+           "a parentless rooted shape uses only its retained local transform");
+
+    auto nested = *parsed;
+    nested.blocks.push_back(NifBlock{ .type_index = 0 });
+    nested.blocks.push_back(NifBlock{ .type_index = 1 });
+    nested.blocks.push_back(NifBlock{ .type_index = 2 });
+    auto nested_node        = nested.nodes[0];
+    nested_node.block_index = 4;
+    nested_node.children    = { 5 };
+    nested.nodes.push_back(nested_node);
+    auto nested_shape        = nested.tri_shapes[0];
+    nested_shape.block_index = 5;
+    nested_shape.data        = 6;
+    nested.tri_shapes.push_back(nested_shape);
+    auto nested_data        = nested.tri_shape_data[0];
+    nested_data.block_index = 6;
+    nested.tri_shape_data.push_back(nested_data);
+    nested.nodes[0].children                = { 4, 1 };
+    nested.nodes[0].object.translation      = { 10.0F, 0.0F, 0.0F };
+    nested.nodes[0].object.scale            = 5.0F;
+    nested.nodes[1].object.translation      = { 0.0F, 3.0F, 0.0F };
+    nested.nodes[1].object.rotation         = rotate_z_positive;
+    nested.nodes[1].object.scale            = 4.0F;
+    nested.tri_shapes[1].object.translation = { 1.0F, 0.0F, 0.0F };
+    nested.tri_shapes[1].object.scale       = 2.0F;
+    const auto nested_model                 = AssembleNifModel(nested);
+    Expect(nested_model && nested_model->meshes.size() == 2 &&
+               nested_model->meshes[0].tri_shape_index == 1 &&
+               nested_model->meshes[0].node_path == std::vector<std::size_t>{ 0, 1 } &&
+               nested_model->meshes[1].tri_shape_index == 0 &&
+               nested_model->meshes[1].node_path == std::vector<std::size_t>{ 0 },
+           "nested nodes preserve source-order mesh discovery and node paths");
+    if (nested_model && nested_model->meshes.size() == 2)
+    {
+        const auto& nested_transform = nested_model->meshes[0].world_transform;
+        const auto  nested_position =
+            ApplyNifModelTransform(nested_transform, { 1.0F, 0.0F, 0.0F });
+        Expect(nested_transform.translation == std::array{ 10.0, 35.0, 0.0 } &&
+                   nested_transform.rotation ==
+                       std::array{ 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0 } &&
+                   nested_transform.scale == 40.0 && nested_position &&
+                   *nested_position == std::array{ 10.0, 75.0, 0.0 },
+               "nested transforms use proved parent-local scale, rotation, and translation order");
+
+        std::vector<NifPreviewMeshView> nested_views;
+        for (const auto& mesh : nested_model->meshes)
+        {
+            const auto& geometry = nested.tri_shape_data[mesh.tri_shape_data_index];
+            nested_views.push_back(
+                { geometry.vertex_positions, geometry.triangles, mesh.world_transform });
+        }
+        const auto nested_layout =
+            CalculateNifWireframeLayout(nested_views, 240.0F, 160.0F);
+        Expect(nested_layout && nested_layout->projection == NifProjection::xy &&
+                   nested_layout->source_center == std::array{ -7.5, 37.5 },
+               "sibling and nested meshes share one transformed Preview space");
+    }
+
+    auto null_child              = *parsed;
+    null_child.nodes[0].children = { UINT32_MAX, 1 };
+    const auto null_child_model  = AssembleNifModel(null_child);
+    Expect(null_child_model && null_child_model->meshes.size() == 1,
+           "null scene child references are ignored");
+
+    auto material_order = *parsed;
+    material_order.blocks.push_back(NifBlock{ .type_index = 3 });
+    material_order.tri_shapes[0].object.properties = { 4, UINT32_MAX, 3 };
+    const auto material_order_model                = AssembleNifModel(material_order);
+    Expect(material_order_model &&
+               material_order_model->meshes[0].material_property_blocks ==
+                   std::vector<std::uint32_t>{ 4, 3 },
+           "direct material properties preserve source order while nulls are ignored");
+
+    auto self_cycle              = *parsed;
+    self_cycle.nodes[0].children = { 0 };
+    const auto self_cycle_result = AssembleNifModel(self_cycle);
+    Expect(!self_cycle_result && self_cycle_result.error() == NifModelError::scene_cycle,
+           "self-referencing scene node reports the exact cycle error");
+
+    auto multi_cycle = *parsed;
+    multi_cycle.blocks.push_back(NifBlock{ .type_index = 0 });
+    auto second_node        = multi_cycle.nodes[0];
+    second_node.block_index = 4;
+    second_node.children    = { 0 };
+    multi_cycle.nodes.push_back(second_node);
+    multi_cycle.nodes[0].children = { 4 };
+    const auto multi_cycle_result = AssembleNifModel(multi_cycle);
+    Expect(!multi_cycle_result && multi_cycle_result.error() == NifModelError::scene_cycle,
+           "multi-node scene cycle terminates with the exact cycle error");
+
+    auto wrong_data               = *parsed;
+    wrong_data.tri_shapes[0].data = 3;
+    const auto wrong_data_result  = AssembleNifModel(wrong_data);
+    Expect(!wrong_data_result &&
+               wrong_data_result.error() == NifModelError::wrong_data_block_type,
+           "valid wrong-type shape data reference fails model assembly");
+
+    auto invalid_selector = synthetic.bytes;
+    WriteU16Be(invalid_selector, synthetic.triangle_indices_offset + 4, 3);
+    const auto invalid_selector_document = ParseNifDocument(invalid_selector);
+    Expect(invalid_selector_document.has_value(),
+           "out-of-range triangle selector remains structurally parseable");
+    if (invalid_selector_document)
+    {
+        const auto invalid_selector_model = AssembleNifModel(*invalid_selector_document);
+        Expect(!invalid_selector_model &&
+                   invalid_selector_model.error() ==
+                       NifModelError::triangle_selector_out_of_range,
+               "out-of-range triangle selector fails at model assembly");
+    }
+
+    auto missing_positions = *parsed;
+    missing_positions.tri_shape_data[0].vertex_positions.clear();
+    const auto missing_positions_result = AssembleNifModel(missing_positions);
+    Expect(!missing_positions_result &&
+               missing_positions_result.error() == NifModelError::inconsistent_geometry,
+           "missing retained positions fail model assembly");
+
+    auto missing_triangles = *parsed;
+    missing_triangles.tri_shape_data[0].triangles.clear();
+    const auto missing_triangles_result = AssembleNifModel(missing_triangles);
+    Expect(!missing_triangles_result &&
+               missing_triangles_result.error() == NifModelError::inconsistent_geometry,
+           "missing retained triangles fail model assembly");
+
+    auto mismatched_normals = *parsed;
+    mismatched_normals.tri_shape_data[0].normal_vectors.pop_back();
+    const auto mismatched_normals_result = AssembleNifModel(mismatched_normals);
+    Expect(!mismatched_normals_result &&
+               mismatched_normals_result.error() == NifModelError::inconsistent_geometry,
+           "mismatched retained normal count fails model assembly");
+
+    auto no_normals                          = *parsed;
+    no_normals.tri_shape_data[0].has_normals = 0;
+    no_normals.tri_shape_data[0].normal_vectors.clear();
+    const auto no_normals_result = AssembleNifModel(no_normals);
+    Expect(no_normals_result && no_normals_result->meshes.size() == 1,
+           "geometry without a retained normal array remains supported");
+
+    auto unsupported = *parsed;
+    unsupported.block_types.push_back(ByteString("UnsupportedSyntheticBlock"));
+    unsupported.blocks.push_back(NifBlock{ .type_index = 4 });
+    unsupported.nodes[0].children = { 4, 1 };
+    const auto unsupported_result = AssembleNifModel(unsupported);
+    Expect(unsupported_result && unsupported_result->meshes.size() == 1,
+           "valid unsupported child block types are skipped");
+
+    auto no_mesh              = *parsed;
+    no_mesh.nodes[0].children = {};
+    const auto no_mesh_result = AssembleNifModel(no_mesh);
+    Expect(!no_mesh_result && no_mesh_result.error() == NifModelError::no_supported_meshes,
+           "rooted scene without supported geometry reports the exact no-mesh error");
+
+    auto non_finite_transform = *parsed;
+    non_finite_transform.nodes[0].object.scale =
+        std::numeric_limits<float>::infinity();
+    const auto non_finite_transform_result = AssembleNifModel(non_finite_transform);
+    Expect(!non_finite_transform_result &&
+               non_finite_transform_result.error() == NifModelError::invalid_transform,
+           "non-finite retained scene transforms fail model assembly exactly");
+}
+
+void TestNifWireframePreview()
+{
+    using namespace rerevved::studio;
+
+    Expect(NifProjectionName(NifProjection::xy) == "Raw XY projection" &&
+               NifProjectionName(NifProjection::xz) == "Raw XZ projection" &&
+               NifProjectionName(NifProjection::yz) == "Raw YZ projection",
+           "NIF preview names every raw-axis projection exactly");
+    Expect(NifPreviewErrorMessage(NifPreviewError::non_finite_position) ==
+                   "The NIF mesh contains a non-finite vertex position." &&
+               NifPreviewErrorMessage(
+                   NifPreviewError::unrepresentable_transformed_position) ==
+                   "A transformed NIF vertex position is non-finite or unrepresentable." &&
+               NifPreviewErrorMessage(NifPreviewError::empty_projected_bounds) ==
+                   "The NIF mesh has no projected bounds to display." &&
+               NifPreviewErrorMessage(NifPreviewError::degenerate_projection) ==
+                   "The NIF mesh has a degenerate raw-axis projection." &&
+               NifPreviewErrorMessage(NifPreviewError::unavailable_region) ==
+                   "The NIF Preview region has no drawable area.",
+           "NIF preview errors retain their exact messages");
+
+    const auto synthetic = MakeSyntheticModelNif();
+    const auto document  = ParseNifDocument(synthetic.bytes);
+    Expect(document.has_value(), "synthetic NIF parses for wireframe preview");
+    if (!document)
+        return;
+    const auto model = AssembleNifModel(*document);
+    Expect(model && !model->meshes.empty(), "synthetic NIF assembles for wireframe preview");
+    if (!model || model->meshes.empty())
+        return;
+
+    const auto&      geometry = document->tri_shape_data[model->meshes[0].tri_shape_data_index];
+    const std::array mesh_view{ NifPreviewMeshView{ geometry.vertex_positions,
+                                                    geometry.triangles,
+                                                    model->meshes[0].world_transform } };
+    const auto       layout =
+        CalculateNifWireframeLayout(mesh_view, 240.0F, 160.0F);
+    Expect(layout && layout->projection == NifProjection::xy,
+           "synthetic positive mesh produces a fitted XY wireframe");
+    if (layout)
+    {
+        const auto&      triangle = geometry.triangles[0];
+        const std::array points{
+            ProjectNifPosition(*layout, geometry.vertex_positions[triangle[0]]),
+            ProjectNifPosition(*layout, geometry.vertex_positions[triangle[1]]),
+            ProjectNifPosition(*layout, geometry.vertex_positions[triangle[2]]),
+        };
+        const std::array edges{
+            std::pair{ points[0], points[1] },
+            std::pair{ points[1], points[2] },
+            std::pair{ points[2], points[0] },
+        };
+        const auto visible_edges = std::ranges::count_if(
+            edges,
+            [](const auto& edge)
+            {
+                return edge.first != edge.second;
+            });
+        Expect(visible_edges == 3,
+               "three synthetic positions and one triangle produce three visible edges");
+    }
+
+    const std::array<std::array<std::uint16_t, 3>, 1> triangles{ { { 0, 1, 2 } } };
+    const std::array                                  xy_positions{
+        std::array{ 0.0F, 0.0F, 0.0F },
+        std::array{ 4.0F, 0.0F, 0.0F },
+        std::array{ 0.0F, 3.0F, 0.0F },
+    };
+    const std::array xz_positions{
+        std::array{ 0.0F, 0.0F, 0.0F },
+        std::array{ 4.0F, 0.0F, 0.0F },
+        std::array{ 0.0F, 0.0F, 3.0F },
+    };
+    const std::array yz_positions{
+        std::array{ 0.0F, 0.0F, 0.0F },
+        std::array{ 0.0F, 4.0F, 0.0F },
+        std::array{ 0.0F, 0.0F, 3.0F },
+    };
+    const auto xy_layout =
+        CalculateNifWireframeLayout(xy_positions, triangles, 200.0F, 100.0F);
+    const auto xz_layout =
+        CalculateNifWireframeLayout(xz_positions, triangles, 200.0F, 100.0F);
+    const auto yz_layout =
+        CalculateNifWireframeLayout(yz_positions, triangles, 200.0F, 100.0F);
+    Expect(xy_layout && xy_layout->projection == NifProjection::xy && xz_layout &&
+               xz_layout->projection == NifProjection::xz && yz_layout &&
+               yz_layout->projection == NifProjection::yz,
+           "dominant projected bounds deterministically select XY, XZ, and YZ");
+
+    const std::array translated_positions{
+        std::array{ -10.0F, -20.0F, -3.0F },
+        std::array{ -6.0F, -20.0F, -3.0F },
+        std::array{ -10.0F, -18.0F, -3.0F },
+    };
+    const auto fitted =
+        CalculateNifWireframeLayout(translated_positions, triangles, 200.0F, 120.0F);
+    Expect(fitted.has_value(), "translated negative-coordinate geometry fits successfully");
+    if (fitted)
+    {
+        std::array<float, 2> minimum{ 200.0F, 120.0F };
+        std::array<float, 2> maximum{};
+        for (const auto& position : translated_positions)
+        {
+            const auto projected = ProjectNifPosition(*fitted, position);
+            for (std::size_t axis = 0; axis < projected.size(); ++axis)
+            {
+                minimum[axis] = std::min(minimum[axis], projected[axis]);
+                maximum[axis] = std::max(maximum[axis], projected[axis]);
+            }
+        }
+        const auto centered =
+            std::abs((minimum[0] + maximum[0]) * 0.5F - 100.0F) < 0.001F &&
+            std::abs((minimum[1] + maximum[1]) * 0.5F - 60.0F) < 0.001F;
+        const auto aspect = (maximum[0] - minimum[0]) / (maximum[1] - minimum[1]);
+        Expect(centered && std::abs(aspect - 2.0F) < 0.001F,
+               "uniform fitting centers translated geometry and preserves aspect ratio");
+        Expect(minimum[0] >= 0.0F && minimum[1] >= 0.0F && maximum[0] <= 200.0F &&
+                   maximum[1] <= 120.0F,
+               "fitted wireframe stays inside the requested Preview region");
+    }
+
+    auto non_finite  = xy_positions;
+    non_finite[2][1] = std::numeric_limits<float>::infinity();
+    const auto non_finite_result =
+        CalculateNifWireframeLayout(non_finite, triangles, 200.0F, 100.0F);
+    Expect(!non_finite_result &&
+               non_finite_result.error() == NifPreviewError::non_finite_position,
+           "non-finite NIF positions fail with the exact preview error");
+
+    NifModelTransform unrepresentable_transform;
+    unrepresentable_transform.scale = std::numeric_limits<double>::max();
+    const std::array unrepresentable_view{
+        NifPreviewMeshView{ xy_positions, triangles, unrepresentable_transform }
+    };
+    const auto unrepresentable =
+        CalculateNifWireframeLayout(unrepresentable_view, 200.0F, 100.0F);
+    Expect(!unrepresentable &&
+               unrepresentable.error() ==
+                   NifPreviewError::unrepresentable_transformed_position,
+           "unrepresentable transformed positions fail with the exact preview error");
+
+    NifModelTransform overflowing_area_transform;
+    overflowing_area_transform.scale = 1.0e200;
+    const std::array overflowing_area_view{
+        NifPreviewMeshView{ xy_positions, triangles, overflowing_area_transform }
+    };
+    const auto overflowing_area =
+        CalculateNifWireframeLayout(overflowing_area_view, 200.0F, 100.0F);
+    Expect(!overflowing_area &&
+               overflowing_area.error() ==
+                   NifPreviewError::unrepresentable_transformed_position,
+           "finite transformed coordinates with overflowing projected area fail exactly");
+
+    const std::array collinear_positions{
+        std::array{ 0.0F, 0.0F, 0.0F },
+        std::array{ 1.0F, 1.0F, 0.0F },
+        std::array{ 2.0F, 2.0F, 0.0F },
+    };
+    const auto collinear =
+        CalculateNifWireframeLayout(collinear_positions, triangles, 200.0F, 100.0F);
+    Expect(!collinear && collinear.error() == NifPreviewError::degenerate_projection,
+           "collinear projected triangle fails safely");
+
+    const std::array point_positions{
+        std::array{ 1.0F, 1.0F, 1.0F },
+        std::array{ 1.0F, 1.0F, 1.0F },
+        std::array{ 1.0F, 1.0F, 1.0F },
+    };
+    const auto point =
+        CalculateNifWireframeLayout(point_positions, triangles, 200.0F, 100.0F);
+    Expect(!point && point.error() == NifPreviewError::empty_projected_bounds,
+           "point-like projected bounds report the exact empty-bounds error");
+
+    const std::span<const std::array<float, 3>> empty_positions;
+    const auto                                  empty =
+        CalculateNifWireframeLayout(empty_positions, triangles, 200.0F, 100.0F);
+    Expect(!empty && empty.error() == NifPreviewError::empty_projected_bounds,
+           "empty NIF positions report the exact projected-bounds error");
+    const auto unavailable =
+        CalculateNifWireframeLayout(xy_positions, triangles, 0.0F, 100.0F);
+    Expect(!unavailable && unavailable.error() == NifPreviewError::unavailable_region,
+           "non-positive Preview width fails without drawing outside its region");
+
+    AssetDocument assembled_asset{};
+    assembled_asset.nif       = *document;
+    assembled_asset.nif_model = *model;
+    AssetDocument assembly_failed_asset{};
+    assembly_failed_asset.nif             = *document;
+    assembly_failed_asset.nif_model_error = NifModelError::no_supported_meshes;
+    AssetDocument parse_failed_asset{};
+    parse_failed_asset.document_error =
+        std::string(NifDocumentErrorMessage(NifDocumentError::truncated));
+    Expect(assembly_failed_asset.nif && !assembly_failed_asset.nif_model &&
+               assembly_failed_asset.nif_model_error &&
+               assembly_failed_asset.document_error.empty() && !parse_failed_asset.nif &&
+               !parse_failed_asset.nif_model_error && !parse_failed_asset.document_error.empty(),
+           "NIF assembly errors remain distinct from parse errors and preserve Inspector data");
+
+    std::vector<AssetDocument> assets;
+    assets.push_back(std::move(assembled_asset));
+    assets.push_back(std::move(assembly_failed_asset));
+    std::size_t selected = 0;
+    Expect(assets[selected].nif_model && !assets[selected].nif_model_error,
+           "selected assembled NIF owns its preview model state");
+    selected = 1;
+    Expect(!assets[selected].nif_model && assets[selected].nif_model_error,
+           "switching NIF documents cannot reuse another preview model");
+    assets.erase(assets.begin());
+    Expect(!assets[0].nif_model && assets[0].nif_model_error,
+           "closing another asset does not retain its NIF preview state");
+}
+
+void TestNifWireframeNavigation()
+{
+    using namespace rerevved::studio;
+
+    Expect(NifProjectionModeName(NifProjectionMode::automatic) == "Auto" &&
+               NifProjectionModeName(NifProjectionMode::xy) == "XY" &&
+               NifProjectionModeName(NifProjectionMode::xz) == "XZ" &&
+               NifProjectionModeName(NifProjectionMode::yz) == "YZ",
+           "NIF preview projection controls use exact neutral labels");
+
+    const auto synthetic = MakeSyntheticModelNif();
+    const auto parsed    = ParseNifDocument(synthetic.bytes);
+    Expect(parsed.has_value(), "synthetic NIF parses for navigation tests");
+    if (!parsed)
+        return;
+
+    auto multi_mesh = *parsed;
+    multi_mesh.blocks.push_back(NifBlock{ .type_index = 1 });
+    multi_mesh.blocks.push_back(NifBlock{ .type_index = 2 });
+    auto second_shape               = multi_mesh.tri_shapes[0];
+    second_shape.block_index        = 4;
+    second_shape.data               = 5;
+    second_shape.object.translation = { 10.0F, 5.0F, 0.0F };
+    multi_mesh.tri_shapes.push_back(second_shape);
+    auto second_data             = multi_mesh.tri_shape_data[0];
+    second_data.block_index      = 5;
+    second_data.vertex_positions = {
+        { 0.0F, 0.0F, 0.0F },
+        { 4.0F, 0.0F, 0.0F },
+        { 0.0F, 0.0F, 3.0F },
+    };
+    multi_mesh.tri_shape_data.push_back(second_data);
+    multi_mesh.nodes[0].children = { 1, 4 };
+    const auto model             = AssembleNifModel(multi_mesh);
+    Expect(model && model->meshes.size() == 2,
+           "multi-mesh synthetic NIF assembles every selectable mesh");
+    if (!model || model->meshes.size() != 2)
+        return;
+
+    NifPreviewState navigation;
+    Expect(navigation.selected_mesh == 0 &&
+               navigation.projection == NifProjectionMode::automatic &&
+               navigation.pan == std::array{ 0.0F, 0.0F } && navigation.zoom == 1.0,
+           "new NIF documents default to the first mesh, Auto, and a fitted view");
+    const std::array expected_projections{ NifProjection::xy, NifProjection::xz };
+    for (std::size_t index = 0; index < model->meshes.size(); ++index)
+    {
+        const auto selected = SelectNifPreviewMesh(
+            navigation, model->meshes.size() + 1, index);
+        const auto&      geometry = multi_mesh.tri_shape_data[model->meshes[navigation.selected_mesh].tri_shape_data_index];
+        const std::array selected_view{
+            NifPreviewMeshView{ geometry.vertex_positions,
+                                geometry.triangles,
+                                model->meshes[navigation.selected_mesh].world_transform }
+        };
+        const auto layout =
+            CalculateNifWireframeLayout(selected_view, 240.0F, 160.0F);
+        Expect(selected && navigation.selected_mesh == index && layout &&
+                   layout->projection == expected_projections[index],
+               "each selected mesh uses its own retained geometry");
+    }
+
+    std::vector<NifPreviewMeshView> all_views;
+    for (const auto& mesh : model->meshes)
+    {
+        const auto& geometry = multi_mesh.tri_shape_data[mesh.tri_shape_data_index];
+        all_views.push_back(
+            { geometry.vertex_positions, geometry.triangles, mesh.world_transform });
+    }
+    const auto all_layout =
+        CalculateNifWireframeLayout(all_views, 240.0F, 160.0F);
+    const auto second_position = TransformNifPreviewPosition(
+        all_views[1], all_views[1].positions[1]);
+    Expect(all_layout && all_layout->projection == NifProjection::xy &&
+               all_layout->source_center == std::array{ 7.0, 2.5 } &&
+               second_position && *second_position == std::array{ 14.0, 5.0, 0.0 },
+           "All meshes fits combined transformed bounds while individual meshes use their transforms");
+
+    PanNifPreview(navigation, 2.0F, 3.0F);
+    ZoomNifPreview(navigation, 1.0F);
+    const auto selected_all = SelectNifPreviewMesh(
+        navigation, model->meshes.size() + 1, model->meshes.size());
+    Expect(selected_all && navigation.selected_mesh == model->meshes.size() &&
+               navigation.pan == std::array{ 0.0F, 0.0F } && navigation.zoom == 1.0,
+           "All meshes is an explicit fitted selection after every individual mesh");
+
+    navigation.pan  = { 9.0F, -4.0F };
+    navigation.zoom = 3.0;
+    const auto invalid_selection =
+        SelectNifPreviewMesh(navigation, model->meshes.size() + 1, 99);
+    Expect(!invalid_selection && navigation.selected_mesh == 0 &&
+               navigation.pan == std::array{ 0.0F, 0.0F } && navigation.zoom == 1.0,
+           "invalid mesh selection deterministically recovers to the first fitted mesh");
+
+    const std::array<std::array<float, 3>, 3> full_axis_positions{
+        std::array{ 0.0F, 0.0F, 0.0F },
+        std::array{ 4.0F, 1.0F, 2.0F },
+        std::array{ 1.0F, 3.0F, 4.0F },
+    };
+    const std::array<std::array<std::uint16_t, 3>, 1> triangle{
+        std::array<std::uint16_t, 3>{ 0, 1, 2 },
+    };
+    const auto automatic = CalculateNifWireframeLayout(full_axis_positions,
+                                                       triangle,
+                                                       240.0F,
+                                                       160.0F,
+                                                       NifProjectionMode::automatic);
+    const auto xy        = CalculateNifWireframeLayout(
+        full_axis_positions, triangle, 240.0F, 160.0F, NifProjectionMode::xy);
+    const auto xz = CalculateNifWireframeLayout(
+        full_axis_positions, triangle, 240.0F, 160.0F, NifProjectionMode::xz);
+    const auto yz = CalculateNifWireframeLayout(
+        full_axis_positions, triangle, 240.0F, 160.0F, NifProjectionMode::yz);
+    Expect(automatic && automatic->projection == NifProjection::xz && xy &&
+               xy->projection == NifProjection::xy && xz &&
+               xz->projection == NifProjection::xz && yz &&
+               yz->projection == NifProjection::yz,
+           "Auto and explicit XY, XZ, and YZ projections are deterministic");
+
+    if (xy)
+    {
+        const auto fitted_scale  = xy->scale;
+        const auto fitted_center = xy->target_center;
+        PanNifPreview(navigation, 12.0F, -7.0F);
+        ZoomNifPreview(navigation, 1.0F);
+        const auto viewed = ApplyNifPreviewView(*xy, navigation);
+        Expect(std::abs(viewed.scale - fitted_scale * 1.2) < 0.001 &&
+                   std::abs(viewed.target_center[0] - fitted_center[0] - 12.0) < 0.001 &&
+                   std::abs(viewed.target_center[1] - fitted_center[1] + 7.0) < 0.001,
+               "NIF preview pan and wheel zoom adjust only the fitted view");
+        ResetNifPreviewView(navigation);
+        const auto reset = ApplyNifPreviewView(*xy, navigation);
+        Expect(reset.scale == fitted_scale && reset.target_center == fitted_center,
+               "Fit/Reset restores the deterministic fitted view");
+    }
+
+    PanNifPreview(navigation, 5.0F, 6.0F);
+    ZoomNifPreview(navigation, 2.0F);
+    SelectNifPreviewProjection(navigation, NifProjectionMode::yz);
+    Expect(navigation.projection == NifProjectionMode::yz &&
+               navigation.pan == std::array{ 0.0F, 0.0F } && navigation.zoom == 1.0,
+           "projection changes restore the fitted view");
+    PanNifPreview(navigation, 3.0F, 4.0F);
+    SelectNifPreviewProjection(navigation, NifProjectionMode::yz);
+    Expect(navigation.pan == std::array{ 3.0F, 4.0F },
+           "reselecting the active projection preserves navigation state");
+    (void)SelectNifPreviewMesh(navigation, model->meshes.size() + 1, 1);
+    Expect(navigation.selected_mesh == 1 &&
+               navigation.pan == std::array{ 0.0F, 0.0F } && navigation.zoom == 1.0,
+           "mesh changes restore the fitted view");
+
+    AssetDocument first_asset{};
+    first_asset.nif              = multi_mesh;
+    first_asset.nif_model        = *model;
+    first_asset.nif_preview      = navigation;
+    first_asset.nif_preview.pan  = { 8.0F, 9.0F };
+    first_asset.nif_preview.zoom = 2.0;
+    AssetDocument second_asset{};
+    second_asset.nif                       = multi_mesh;
+    second_asset.nif_model                 = *model;
+    second_asset.nif_preview.selected_mesh = 0;
+    second_asset.nif_preview.projection    = NifProjectionMode::xy;
+    second_asset.nif_preview.pan           = { -3.0F, 1.0F };
+    second_asset.nif_preview.zoom          = 0.5;
+    Expect(first_asset.nif_preview.selected_mesh == 1 &&
+               first_asset.nif_preview.projection == NifProjectionMode::yz &&
+               first_asset.nif_preview.pan == std::array{ 8.0F, 9.0F } &&
+               first_asset.nif_preview.zoom == 2.0 &&
+               second_asset.nif_preview.selected_mesh == 0 &&
+               second_asset.nif_preview.projection == NifProjectionMode::xy &&
+               second_asset.nif_preview.pan == std::array{ -3.0F, 1.0F },
+           "open NIF documents retain independent mesh, projection, pan, and zoom state");
+    std::vector<AssetDocument> assets;
+    assets.push_back(std::move(first_asset));
+    assets.push_back(std::move(second_asset));
+    assets.erase(assets.begin());
+    Expect(assets[0].nif_preview.selected_mesh == 0 &&
+               assets[0].nif_preview.projection == NifProjectionMode::xy &&
+               assets[0].nif_preview.pan == std::array{ -3.0F, 1.0F } &&
+               assets[0].nif_preview.zoom == 0.5,
+           "closing or switching NIF documents cannot retain another document's view state");
+
+    const auto wide     = CalculateNifPreviewControlsLayout(500.0F, 8.0F, 72.0F);
+    const auto exact    = CalculateNifPreviewControlsLayout(220.0F, 8.0F, 72.0F);
+    const auto below    = CalculateNifPreviewControlsLayout(219.0F, 8.0F, 72.0F);
+    const auto zero     = CalculateNifPreviewControlsLayout(0.0F, 8.0F, 72.0F);
+    const auto negative = CalculateNifPreviewControlsLayout(-50.0F, 8.0F, 72.0F);
+    Expect(wide.mesh_width == 320.0F && wide.projection_width == 140.0F &&
+               wide.reset_width == 72.0F && wide.reset_same_line,
+           "wide NIF Preview controls retain their preferred and natural widths");
+    Expect(exact.projection_width == 140.0F && exact.reset_width == 72.0F &&
+               exact.reset_same_line && !below.reset_same_line &&
+               below.reset_width == 72.0F,
+           "exact-fit controls remain inline and stack just before clipping");
+    Expect(zero.mesh_width > 0.0F && zero.projection_width > 0.0F &&
+               zero.reset_width > 0.0F && negative.mesh_width > 0.0F &&
+               negative.projection_width > 0.0F && negative.reset_width > 0.0F,
+           "non-positive Preview widths still produce reachable positive controls");
 }
 
 std::vector<std::byte> MakeFpk()
@@ -1944,8 +3026,8 @@ void TestCloseOpenedArchiveEntry()
     };
 
     CloseOpenedArchiveEntry(first_state);
-    Expect(!first_state.opened_document,
-           "closing an embedded entry releases only its opened document");
+    Expect(!first_state.opened_document && !first_state.nif_preview,
+           "closing an embedded entry releases its opened document and preview state");
     Expect(unrelated_state_preserved(),
            "closing an embedded entry preserves every unrelated archive field");
     Expect(first_document->bytes == archive_bytes && second_document->bytes == archive_bytes,
@@ -1964,6 +3046,215 @@ void TestCloseOpenedArchiveEntry()
     Expect(reopened && reopened->entry_index == *first_state.selected_entry &&
                reopened->format == first_state.selected_format,
            "retained selection and explicit format reopen the same embedded entry");
+}
+
+void TestEmbeddedNifWireframePreview()
+{
+    using namespace rerevved::studio;
+
+    auto synthetic = MakeSyntheticModelNif();
+    WriteNifF32(synthetic.bytes, synthetic.shape_transform_offset, 10.0F);
+    WriteNifF32(synthetic.bytes, synthetic.shape_transform_offset + 4, 5.0F);
+    WriteNifF32(synthetic.bytes, synthetic.shape_transform_offset + 48, 2.0F);
+    auto no_mesh = synthetic.bytes;
+    WriteU32Be(no_mesh, synthetic.root_reference_offset, UINT32_MAX);
+    const std::array<std::vector<std::byte>, 5> payloads{
+        synthetic.bytes,
+        synthetic.bytes,
+        no_mesh,
+        std::vector{ std::byte{ 'B' }, std::byte{ 'A' }, std::byte{ 'D' } },
+        MakeGfx(),
+    };
+    const auto archive_bytes  = MakeFpkWithPayloads(payloads);
+    const auto first_archive  = ParseFpkDocument(archive_bytes);
+    const auto second_archive = ParseFpkDocument(archive_bytes);
+    Expect(first_archive && second_archive,
+           "independent synthetic archives parse for embedded NIF preview");
+    if (!first_archive || !second_archive)
+        return;
+
+    ArchiveExplorerState first_state;
+    (void)SelectArchiveEntry(first_state, payloads.size(), 1);
+    first_state.selected_format   = FpkEntryFormat::nif;
+    first_state.metadata_result   = "retained metadata";
+    first_state.extraction_result = "retained extraction";
+    first_state.navigation_error  = "retained navigation";
+    first_state.extraction_path.fill('P');
+    OpenSelectedArchiveEntryInMemory(*first_archive, first_state);
+    Expect(first_state.opened_document && first_state.nif_preview &&
+               first_state.nif_preview->model &&
+               !first_state.nif_preview->assembly_error && first_state.open_error.empty(),
+           "explicitly opened embedded NIF assembles a wireframe preview model");
+    Expect(first_state.nif_preview &&
+               first_state.nif_preview->navigation.selected_mesh == 0 &&
+               first_state.nif_preview->navigation.projection ==
+                   NifProjectionMode::automatic &&
+               first_state.nif_preview->navigation.pan == std::array{ 0.0F, 0.0F } &&
+               first_state.nif_preview->navigation.zoom == 1.0,
+           "new embedded NIF preview starts on the first mesh with fitted Auto state");
+    if (first_state.nif_preview && first_state.nif_preview->model)
+    {
+        const auto& preview_document =
+            std::get<NifDocument>(first_state.opened_document->data);
+        const auto& preview_mesh = first_state.nif_preview->model->meshes[0];
+        const auto& preview_geometry =
+            preview_document.tri_shape_data[preview_mesh.tri_shape_data_index];
+        const auto embedded_position = ApplyNifModelTransform(
+            preview_mesh.world_transform, preview_geometry.vertex_positions[1]);
+        Expect(embedded_position && *embedded_position == std::array{ 12.0, 5.0, 0.0 },
+               "embedded NIF preview applies the retained shape transform");
+        const auto selected_all = SelectNifPreviewMesh(
+            first_state.nif_preview->navigation,
+            first_state.nif_preview->model->meshes.size() + 1,
+            first_state.nif_preview->model->meshes.size());
+        Expect(selected_all && first_state.nif_preview->navigation.selected_mesh == 1,
+               "embedded NIF Preview exposes the shared All meshes selection");
+    }
+
+    first_state.nif_preview->navigation.projection = NifProjectionMode::yz;
+    first_state.nif_preview->navigation.pan        = { 7.0F, -3.0F };
+    first_state.nif_preview->navigation.zoom       = 2.0;
+
+    ArchiveExplorerState second_state;
+    (void)SelectArchiveEntry(second_state, payloads.size(), 1);
+    second_state.selected_format = FpkEntryFormat::nif;
+    OpenSelectedArchiveEntryInMemory(*second_archive, second_state);
+    Expect(second_state.nif_preview && second_state.nif_preview->model &&
+               second_state.nif_preview->navigation.selected_mesh == 0 &&
+               second_state.nif_preview->navigation.projection ==
+                   NifProjectionMode::automatic &&
+               second_state.nif_preview->navigation.pan == std::array{ 0.0F, 0.0F } &&
+               second_state.nif_preview->navigation.zoom == 1.0 &&
+               first_state.nif_preview->navigation.selected_mesh == 1 &&
+               first_state.nif_preview->navigation.projection == NifProjectionMode::yz &&
+               first_state.nif_preview->navigation.pan == std::array{ 7.0F, -3.0F } &&
+               first_state.nif_preview->navigation.zoom == 2.0,
+           "separate archives retain independent embedded NIF preview state");
+
+    const auto selected_before         = first_state.selected_entry;
+    const auto requested_before        = first_state.requested_entry;
+    const auto format_before           = first_state.selected_format;
+    const auto metadata_before         = first_state.metadata_result;
+    const auto extraction_before       = first_state.extraction_result;
+    const auto extraction_path_before  = first_state.extraction_path;
+    const auto navigation_error_before = first_state.navigation_error;
+    const auto source_before           = first_archive->bytes;
+    CloseOpenedArchiveEntry(first_state);
+    Expect(!first_state.opened_document && !first_state.nif_preview &&
+               first_state.selected_entry == selected_before &&
+               first_state.requested_entry == requested_before &&
+               first_state.selected_format == format_before &&
+               first_state.metadata_result == metadata_before &&
+               first_state.extraction_result == extraction_before &&
+               first_state.extraction_path == extraction_path_before &&
+               first_state.navigation_error == navigation_error_before &&
+               first_archive->bytes == source_before,
+           "closing embedded NIF clears only opened preview ownership and preserves archive state");
+    Expect(second_state.opened_document && second_state.nif_preview &&
+               second_state.nif_preview->model,
+           "closing one archive preview leaves another archive fully independent");
+
+    OpenSelectedArchiveEntryInMemory(*first_archive, first_state);
+    Expect(first_state.opened_document && first_state.nif_preview &&
+               first_state.nif_preview->model &&
+               first_state.nif_preview->navigation.selected_mesh == 0 &&
+               first_state.nif_preview->navigation.projection ==
+                   NifProjectionMode::automatic &&
+               first_state.nif_preview->navigation.pan == std::array{ 0.0F, 0.0F } &&
+               first_state.nif_preview->navigation.zoom == 1.0,
+           "closed embedded NIF reopens immediately with deterministic preview state");
+
+    first_state.nif_preview->navigation.projection = NifProjectionMode::xz;
+    first_state.nif_preview->navigation.pan        = { 4.0F, 5.0F };
+    first_state.nif_preview->navigation.zoom       = 3.0;
+    (void)SelectArchiveEntry(first_state, payloads.size(), 2);
+    Expect(!first_state.opened_document && !first_state.nif_preview &&
+               first_state.selected_entry == 1,
+           "selecting another archive entry removes the previous embedded preview state");
+    OpenSelectedArchiveEntryInMemory(*first_archive, first_state);
+    Expect(first_state.opened_document && first_state.nif_preview &&
+               first_state.nif_preview->model &&
+               first_state.nif_preview->navigation.selected_mesh == 0 &&
+               first_state.nif_preview->navigation.projection ==
+                   NifProjectionMode::automatic &&
+               first_state.nif_preview->navigation.pan == std::array{ 0.0F, 0.0F } &&
+               first_state.nif_preview->navigation.zoom == 1.0,
+           "opening a different embedded NIF initializes a fresh fitted Auto view");
+
+    (void)SelectArchiveEntry(first_state, payloads.size(), 4);
+    first_state.selected_format   = FpkEntryFormat::nif;
+    first_state.metadata_result   = "parse metadata";
+    first_state.extraction_result = "parse extraction";
+    OpenSelectedArchiveEntryInMemory(*first_archive, first_state);
+    Expect(!first_state.opened_document && first_state.nif_preview &&
+               !first_state.nif_preview->model &&
+               !first_state.nif_preview->assembly_error &&
+               first_state.open_error == "The NIF file is truncated." &&
+               first_state.metadata_result == "parse metadata" &&
+               first_state.extraction_result == "parse extraction",
+           "embedded NIF parse failure remains distinct and preserves Archive Explorer state");
+
+    (void)SelectArchiveEntry(first_state, payloads.size(), 3);
+    first_state.selected_format   = FpkEntryFormat::nif;
+    first_state.metadata_result   = "assembly metadata";
+    first_state.extraction_result = "assembly extraction";
+    OpenSelectedArchiveEntryInMemory(*first_archive, first_state);
+    Expect(first_state.opened_document && first_state.nif_preview &&
+               !first_state.nif_preview->model &&
+               first_state.nif_preview->assembly_error ==
+                   NifModelError::no_supported_meshes &&
+               first_state.open_error.empty() &&
+               first_state.metadata_result == "assembly metadata" &&
+               first_state.extraction_result == "assembly extraction",
+           "embedded NIF assembly failure remains distinct from parse failure");
+
+    ArchiveExplorerState explicit_gfx_state;
+    (void)SelectArchiveEntry(explicit_gfx_state, payloads.size(), 1);
+    explicit_gfx_state.selected_format = FpkEntryFormat::gfx;
+    OpenSelectedArchiveEntryInMemory(*first_archive, explicit_gfx_state);
+    Expect(!explicit_gfx_state.opened_document && !explicit_gfx_state.nif_preview &&
+               explicit_gfx_state.open_error == "The file does not have a valid GFX signature.",
+           "a selected NIF payload is not previewed without explicit NIF routing");
+
+    ArchiveExplorerState valid_gfx_state;
+    (void)SelectArchiveEntry(valid_gfx_state, payloads.size(), 5);
+    valid_gfx_state.selected_format = FpkEntryFormat::gfx;
+    OpenSelectedArchiveEntryInMemory(*first_archive, valid_gfx_state);
+    Expect(valid_gfx_state.opened_document && !valid_gfx_state.nif_preview &&
+               std::holds_alternative<GfxDocument>(valid_gfx_state.opened_document->data),
+           "non-NIF embedded preview routing remains unchanged");
+
+    AssetDocument direct_asset;
+    const auto    direct_document = ParseNifDocument(synthetic.bytes);
+    Expect(direct_document.has_value(), "direct NIF regression fixture parses");
+    if (direct_document)
+    {
+        direct_asset.nif        = *direct_document;
+        const auto direct_model = AssembleNifModel(*direct_document);
+        if (direct_model)
+            direct_asset.nif_model = *direct_model;
+        direct_asset.nif_preview.projection = NifProjectionMode::xz;
+        direct_asset.nif_preview.pan        = { 11.0F, 12.0F };
+        direct_asset.nif_preview.zoom       = 1.5;
+        CloseOpenedArchiveEntry(second_state);
+        const auto direct_position = direct_asset.nif_model
+                                         ? ApplyNifModelTransform(
+                                               direct_asset.nif_model->meshes[0].world_transform,
+                                               direct_asset.nif->tri_shape_data[0]
+                                                   .vertex_positions[1])
+                                         : std::expected<std::array<double, 3>, NifModelError>(
+                                               std::unexpected(
+                                                   NifModelError::invalid_transform));
+        Expect(direct_asset.nif && direct_asset.nif_model && direct_position &&
+                   *direct_position == std::array{ 12.0, 5.0, 0.0 } &&
+                   direct_asset.nif_preview.projection == NifProjectionMode::xz &&
+                   direct_asset.nif_preview.pan == std::array{ 11.0F, 12.0F } &&
+                   direct_asset.nif_preview.zoom == 1.5,
+               "direct and embedded NIFs share transformed preview behavior and isolated state");
+    }
+
+    Expect(first_archive->bytes == archive_bytes && second_archive->bytes == archive_bytes,
+           "embedded NIF preview lifecycle preserves every retained archive byte");
 }
 
 void RemoveTestFile(const std::filesystem::path& path);
@@ -2423,7 +3714,12 @@ int main()
     TestMp3Document();
     TestNifDocument();
     TestNifGeometryInventory();
+    TestSyntheticModelFixture();
+    TestNifModelAssembly();
+    TestNifWireframePreview();
+    TestNifWireframeNavigation();
     TestCloseOpenedArchiveEntry();
+    TestEmbeddedNifWireframePreview();
     TestInitialArchiveSelection();
     TestFpkIndex();
     TestFpkDocument();

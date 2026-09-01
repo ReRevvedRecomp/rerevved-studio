@@ -5,6 +5,7 @@
 #include "map_preview.h"
 #include "mp3_preview.h"
 #include "nif_inspector.h"
+#include "nif_preview.h"
 
 #include <imgui.h>
 
@@ -34,15 +35,18 @@ bool Application::OpenPath(const std::filesystem::path& path)
     }
 
     AssetDocument document{
-        .inspection     = std::move(*inspection),
-        .fpk            = std::nullopt,
-        .archive        = {},
-        .dds            = std::nullopt,
-        .gfx            = std::nullopt,
-        .map            = std::nullopt,
-        .mp3            = std::nullopt,
-        .nif            = std::nullopt,
-        .document_error = {},
+        .inspection      = std::move(*inspection),
+        .fpk             = std::nullopt,
+        .archive         = {},
+        .dds             = std::nullopt,
+        .gfx             = std::nullopt,
+        .map             = std::nullopt,
+        .mp3             = std::nullopt,
+        .nif             = std::nullopt,
+        .nif_model       = std::nullopt,
+        .nif_model_error = std::nullopt,
+        .nif_preview     = {},
+        .document_error  = {},
     };
     if (document.inspection.kind == FileKind::fpk_archive)
     {
@@ -91,7 +95,14 @@ bool Application::OpenPath(const std::filesystem::path& path)
     {
         auto nif = LoadNifDocument(document.inspection.path);
         if (nif)
+        {
             document.nif = std::move(*nif);
+            auto model   = AssembleNifModel(*document.nif);
+            if (model)
+                document.nif_model = std::move(*model);
+            else
+                document.nif_model_error = model.error();
+        }
         else
             document.document_error = std::move(nif.error());
     }
@@ -299,7 +310,7 @@ void Application::DrawPreview()
         return;
     }
 
-    const auto& document = inspections_[*selected_];
+    auto& document = inspections_[*selected_];
     if (document.inspection.kind == FileKind::fpk_archive)
     {
         DrawArchivePreview(document.inspection.path, document.archive, dds_viewer_);
@@ -315,6 +326,16 @@ void Application::DrawPreview()
     {
         dds_viewer_.Clear();
         DrawMp3Preview(document.mp3 ? &*document.mp3 : nullptr, document.document_error);
+        return;
+    }
+    if (document.inspection.kind == FileKind::nif_container)
+    {
+        dds_viewer_.Clear();
+        DrawNifPreview(document.nif ? &*document.nif : nullptr,
+                       document.nif_model ? &*document.nif_model : nullptr,
+                       document.nif_model_error,
+                       document.document_error,
+                       document.nif_preview);
         return;
     }
     if (document.inspection.kind != FileKind::dds_texture)

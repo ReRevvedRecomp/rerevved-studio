@@ -291,6 +291,7 @@ void DrawArchiveInspector(const FpkDocument*    document,
     {
         state.selected_format = static_cast<FpkEntryFormat>(selected_format);
         state.opened_document.reset();
+        state.nif_preview.reset();
         state.open_error.clear();
     }
     const auto open_row = CalculateArchiveActionRowLayout(
@@ -301,20 +302,7 @@ void DrawArchiveInspector(const FpkDocument*    document,
         style.ItemSpacing.x,
         0.0F);
     if (ImGui::Button("Open selected in memory", ImVec2(open_row.first_width, 0.0F)))
-    {
-        auto opened = OpenFpkEntryDocument(
-            *document, *state.selected_entry, state.selected_format);
-        if (opened)
-        {
-            state.opened_document = std::move(*opened);
-            state.open_error.clear();
-        }
-        else
-        {
-            state.opened_document.reset();
-            state.open_error = std::move(opened.error());
-        }
-    }
+        OpenSelectedArchiveEntryInMemory(*document, state);
     if (open_row.same_line)
         ImGui::SameLine();
     if (ImGui::Button("Extract selected...", ImVec2(open_row.second_width, 0.0F)))
@@ -332,9 +320,23 @@ void DrawArchiveInspector(const FpkDocument*    document,
 }
 
 void DrawArchivePreview(const std::filesystem::path& archive_path,
-                        const ArchiveExplorerState&  state,
+                        ArchiveExplorerState&        state,
                         DdsViewer&                   dds_viewer)
 {
+    if (state.nif_preview)
+    {
+        const NifDocument* nif = nullptr;
+        if (state.opened_document)
+            nif = std::get_if<NifDocument>(&state.opened_document->data);
+        dds_viewer.Clear();
+        DrawNifPreview(nif,
+                       state.nif_preview->model ? &*state.nif_preview->model : nullptr,
+                       state.nif_preview->assembly_error,
+                       state.open_error,
+                       state.nif_preview->navigation);
+        return;
+    }
+
     if (!state.opened_document)
     {
         dds_viewer.Draw(nullptr, {}, "Open a supported FPK entry to preview it.");

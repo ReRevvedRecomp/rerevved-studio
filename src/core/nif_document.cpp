@@ -91,6 +91,48 @@ bool ReadBlockF32(std::span<const std::byte> bytes, std::size_t& offset, float& 
     return true;
 }
 
+bool ReadVector3Array(std::span<const std::byte>         bytes,
+                      std::size_t&                       offset,
+                      std::uint32_t                      count,
+                      std::vector<std::array<float, 3>>& values)
+{
+    if (!CanReadArray(bytes, offset, count, 12))
+        return false;
+    values.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index)
+    {
+        std::array<float, 3> value{};
+        for (auto& component : value)
+        {
+            if (!ReadBlockF32(bytes, offset, component))
+                return false;
+        }
+        values.push_back(value);
+    }
+    return true;
+}
+
+bool ReadTriangleArray(std::span<const std::byte>                 bytes,
+                       std::size_t&                               offset,
+                       std::uint32_t                              count,
+                       std::vector<std::array<std::uint16_t, 3>>& values)
+{
+    if (!CanReadArray(bytes, offset, count, 6))
+        return false;
+    values.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index)
+    {
+        std::array<std::uint16_t, 3> value{};
+        for (auto& selector : value)
+        {
+            if (!ReadBlockU16(bytes, offset, selector))
+                return false;
+        }
+        values.push_back(value);
+    }
+    return true;
+}
+
 bool SkipBlockArray(std::span<const std::byte> bytes,
                     std::size_t&               offset,
                     std::uint32_t              count,
@@ -265,10 +307,12 @@ bool ParseTriShapeData(std::span<const std::byte> bytes,
         !ReadBlockU8(bytes, offset, data.keep_flags) ||
         !ReadBlockU8(bytes, offset, data.compress_flags) ||
         !ReadBlockU8(bytes, offset, data.has_vertices) ||
-        (data.has_vertices != 0 && !SkipBlockArray(bytes, offset, data.vertex_count, 12)) ||
+        (data.has_vertices != 0 &&
+         !ReadVector3Array(bytes, offset, data.vertex_count, data.vertex_positions)) ||
         !ReadBlockU16(bytes, offset, data.data_flags) ||
         !ReadBlockU8(bytes, offset, data.has_normals) ||
-        (data.has_normals != 0 && !SkipBlockArray(bytes, offset, data.vertex_count, 12)))
+        (data.has_normals != 0 &&
+         !ReadVector3Array(bytes, offset, data.vertex_count, data.normal_vectors)))
         return false;
     data.group_id = std::bit_cast<std::int32_t>(group_id);
 
@@ -299,16 +343,29 @@ bool ParseTriShapeData(std::span<const std::byte> bytes,
         !ReadBlockU32(bytes, offset, data.triangle_point_count) ||
         !ReadBlockU8(bytes, offset, data.has_triangles) ||
         (data.has_triangles != 0 &&
-         !SkipBlockArray(bytes, offset, data.triangle_count, 6)) ||
-        !ReadBlockU16(bytes, offset, data.match_group_count))
+         !ReadTriangleArray(bytes, offset, data.triangle_count, data.triangles)) ||
+        !ReadBlockU16(bytes, offset, data.match_group_count) ||
+        !CanReadArray(bytes, offset, data.match_group_count, 2))
         return false;
 
+    data.normal_sharing_groups.reserve(data.match_group_count);
     for (std::uint16_t index = 0; index < data.match_group_count; ++index)
     {
-        std::uint16_t vertex_count = 0;
-        if (!ReadBlockU16(bytes, offset, vertex_count) ||
-            !SkipBlockArray(bytes, offset, vertex_count, 2))
+        std::uint16_t selector_count = 0;
+        if (!ReadBlockU16(bytes, offset, selector_count) ||
+            !CanReadArray(bytes, offset, selector_count, 2))
             return false;
+        std::vector<std::uint16_t> group;
+        group.reserve(selector_count);
+        for (std::uint16_t selector_index = 0; selector_index < selector_count;
+             ++selector_index)
+        {
+            std::uint16_t selector = 0;
+            if (!ReadBlockU16(bytes, offset, selector))
+                return false;
+            group.push_back(selector);
+        }
+        data.normal_sharing_groups.push_back(std::move(group));
     }
     return offset == bytes.size();
 }

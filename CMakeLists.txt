@@ -61,6 +61,7 @@ add_library(rerevved_studio_core STATIC
     src/core/map_document.cpp
     src/core/mp3_document.cpp
     src/core/nif_document.cpp
+    src/core/nif_model.cpp
 )
 target_include_directories(rerevved_studio_core PUBLIC api)
 target_include_directories(rerevved_studio_core SYSTEM PRIVATE ${dr_libs_SOURCE_DIR})
@@ -76,6 +77,8 @@ add_executable(rerevved-studio
     src/app/main.cpp
     src/app/mp3_preview.cpp
     src/app/nif_inspector.cpp
+    src/app/nif_preview.cpp
+    src/app/nif_preview_layout.cpp
 )
 target_include_directories(rerevved-studio PRIVATE src/app)
 target_link_libraries(rerevved-studio PRIVATE
@@ -100,6 +103,7 @@ rerevved_studio_enable_warnings(rerevved-studio)
 if(BUILD_TESTING)
     add_executable(rerevved_studio_tests
         src/app/inspection_format.cpp
+        src/app/nif_preview_layout.cpp
         tests/studio_tests.cpp
     )
     target_include_directories(rerevved_studio_tests PRIVATE src/app)

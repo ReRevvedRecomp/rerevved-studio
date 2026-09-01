@@ -2,6 +2,7 @@
 
 #include "dds_viewer.h"
 #include "fpk_document.h"
+#include "nif_preview.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace rerevved::studio
 {
@@ -105,11 +107,50 @@ struct ArchiveExplorerState
     std::string                     metadata_result;
     std::uint64_t                   requested_entry = 1;
     std::string                     navigation_error;
+
+    struct NifPreview
+    {
+        std::optional<NifModel>      model;
+        std::optional<NifModelError> assembly_error;
+        NifPreviewState              navigation;
+    };
+
+    std::optional<NifPreview> nif_preview;
 };
 
 inline void CloseOpenedArchiveEntry(ArchiveExplorerState& state)
 {
     state.opened_document.reset();
+    state.nif_preview.reset();
+}
+
+inline void OpenSelectedArchiveEntryInMemory(const FpkDocument&    document,
+                                             ArchiveExplorerState& state)
+{
+    state.nif_preview.reset();
+    auto opened = OpenFpkEntryDocument(
+        document, *state.selected_entry, state.selected_format);
+    if (!opened)
+    {
+        state.opened_document.reset();
+        state.open_error = std::move(opened.error());
+        if (state.selected_format == FpkEntryFormat::nif)
+            state.nif_preview.emplace();
+        return;
+    }
+
+    state.opened_document = std::move(*opened);
+    state.open_error.clear();
+    const auto* nif = std::get_if<NifDocument>(&state.opened_document->data);
+    if (!nif)
+        return;
+
+    auto& preview = state.nif_preview.emplace();
+    auto  model   = AssembleNifModel(*nif);
+    if (model)
+        preview.model = std::move(*model);
+    else
+        preview.assembly_error = model.error();
 }
 
 [[nodiscard]] inline bool SelectArchiveEntry(ArchiveExplorerState& state,
@@ -136,6 +177,7 @@ inline void CloseOpenedArchiveEntry(ArchiveExplorerState& state)
 
     state.selected_entry = selected_entry;
     state.opened_document.reset();
+    state.nif_preview.reset();
     state.open_error.clear();
     state.extraction_result.clear();
     state.metadata_result.clear();
@@ -155,7 +197,7 @@ void DrawArchiveInspector(const FpkDocument*    document,
                           std::string_view      error);
 
 void DrawArchivePreview(const std::filesystem::path& archive_path,
-                        const ArchiveExplorerState&  state,
+                        ArchiveExplorerState&        state,
                         DdsViewer&                   dds_viewer);
 
 } // namespace rerevved::studio

@@ -70,23 +70,27 @@ struct NifTriShape
 
 struct NifTriShapeDataInventory
 {
-    std::uint32_t        block_index    = 0;
-    std::int32_t         group_id       = 0;
-    std::uint16_t        vertex_count   = 0;
-    std::uint8_t         keep_flags     = 0;
-    std::uint8_t         compress_flags = 0;
-    std::uint8_t         has_vertices   = 0;
-    std::uint16_t        data_flags     = 0;
-    std::uint8_t         has_normals    = 0;
-    std::array<float, 3> bound_center{};
-    float                bound_radius         = 0.0F;
-    std::uint8_t         has_vertex_colors    = 0;
-    std::uint16_t        consistency_flags    = 0;
-    std::uint32_t        additional_data      = UINT32_MAX;
-    std::uint16_t        triangle_count       = 0;
-    std::uint32_t        triangle_point_count = 0;
-    std::uint8_t         has_triangles        = 0;
-    std::uint16_t        match_group_count    = 0;
+    std::uint32_t                             block_index    = 0;
+    std::int32_t                              group_id       = 0;
+    std::uint16_t                             vertex_count   = 0;
+    std::uint8_t                              keep_flags     = 0;
+    std::uint8_t                              compress_flags = 0;
+    std::uint8_t                              has_vertices   = 0;
+    std::vector<std::array<float, 3>>         vertex_positions;
+    std::uint16_t                             data_flags  = 0;
+    std::uint8_t                              has_normals = 0;
+    std::vector<std::array<float, 3>>         normal_vectors;
+    std::array<float, 3>                      bound_center{};
+    float                                     bound_radius         = 0.0F;
+    std::uint8_t                              has_vertex_colors    = 0;
+    std::uint16_t                             consistency_flags    = 0;
+    std::uint32_t                             additional_data      = UINT32_MAX;
+    std::uint16_t                             triangle_count       = 0;
+    std::uint32_t                             triangle_point_count = 0;
+    std::uint8_t                              has_triangles        = 0;
+    std::vector<std::array<std::uint16_t, 3>> triangles;
+    std::uint16_t                             match_group_count = 0;
+    std::vector<std::vector<std::uint16_t>>   normal_sharing_groups;
 };
 
 struct NifDocument
