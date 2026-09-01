@@ -6,6 +6,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$requiredClangFormatMajor = 22
+$clangFormat = Get-Command clang-format -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $clangFormat) {
+    throw "clang-format $requiredClangFormatMajor.x is required but was not found in PATH."
+}
+$versionOutput = @(& $clangFormat.Source --version 2>&1)
+$versionExitCode = $LASTEXITCODE
+$versionText = ($versionOutput -join ' ').Trim()
+$versionMatch = [regex]::Match($versionText, '(?i)\bclang-format version (?<version>\d+\.\d+\.\d+)(?=\s|$|\()')
+if ($versionExitCode -ne 0) {
+    throw "clang-format $requiredClangFormatMajor.x version query failed at $($clangFormat.Source): $versionText"
+}
+if (-not $versionMatch.Success -or -not $versionMatch.Groups['version'].Value.StartsWith("$requiredClangFormatMajor.")) {
+    $reportedVersion = if ($versionMatch.Success) { $versionMatch.Groups['version'].Value } else { 'unknown' }
+    throw "clang-format $requiredClangFormatMajor.x is required; found $reportedVersion at $($clangFormat.Source)."
+}
 
 Push-Location $repoRoot
 try {
@@ -33,7 +50,7 @@ try {
     $sources = Get-ChildItem -Path 'api', 'src', 'tests' -Recurse -File |
         Where-Object { $_.Extension -in '.cpp', '.h' } |
         ForEach-Object { $_.FullName }
-    & clang-format --dry-run --Werror $sources
+    & $clangFormat.Source --dry-run --Werror $sources
     if ($LASTEXITCODE -ne 0) { throw 'clang-format check failed.' }
 
     & git diff --check
