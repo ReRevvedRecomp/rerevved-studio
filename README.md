@@ -1,3 +1,7 @@
+<p align="center">
+<img src="res/rerevved_studio_logo.png" alt="ReRevved Studio" width="192">
+</p>
+
 <h1 align="center">ReRevved Studio</h1>
 
 <p align="center">

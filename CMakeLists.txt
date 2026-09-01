@@ -81,6 +81,15 @@ add_executable(rerevved-studio
     src/app/nif_preview.cpp
     src/app/nif_preview_layout.cpp
 )
+
+if(WIN32)
+    set(REREVVED_STUDIO_RC_ICON
+        "${CMAKE_CURRENT_SOURCE_DIR}/res/rerevved_studio.ico")
+    configure_file(res/rerevved_studio.rc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/rerevved_studio.rc" @ONLY)
+    target_sources(rerevved-studio PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/rerevved_studio.rc")
+endif()
 target_include_directories(rerevved-studio PRIVATE src/app)
 target_link_libraries(rerevved-studio PRIVATE
     rerevved_studio_core
