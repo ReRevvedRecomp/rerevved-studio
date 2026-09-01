@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,6 +60,85 @@ struct NifMaterialData
     std::uint8_t               material_needs_update = 0;
 };
 
+struct NifMaterialPropertyInventory
+{
+    std::uint32_t        block_index = 0;
+    std::array<float, 3> ambient_color{};
+    std::array<float, 3> diffuse_color{};
+    std::array<float, 3> specular_color{};
+    std::array<float, 3> emissive_color{};
+    float                glossiness = 0.0F;
+    float                alpha      = 0.0F;
+};
+
+struct NifTextureTransformInventory
+{
+    std::array<float, 2> translation{};
+    std::array<float, 2> scale{};
+    float                rotation         = 0.0F;
+    std::uint32_t        transform_method = 0;
+    std::array<float, 2> center{};
+};
+
+struct NifTexDescInventory
+{
+    std::uint32_t                               source                = UINT32_MAX;
+    std::uint16_t                               flags                 = 0;
+    std::uint8_t                                has_texture_transform = 0;
+    std::optional<NifTextureTransformInventory> transform;
+};
+
+struct NifBumpTextureInventory
+{
+    float                luma_scale  = 0.0F;
+    float                luma_offset = 0.0F;
+    std::array<float, 4> bump_matrix{};
+};
+
+struct NifTextureSlotInventory
+{
+    std::uint8_t                           presence = 0;
+    std::optional<NifTexDescInventory>     descriptor;
+    std::optional<NifBumpTextureInventory> bump;
+    std::optional<float>                   parallax_offset;
+};
+
+struct NifShaderTextureInventory
+{
+    std::uint8_t                       has_map = 0;
+    std::optional<NifTexDescInventory> descriptor;
+    std::optional<std::uint32_t>       map_id;
+};
+
+struct NifTexturingPropertyInventory
+{
+    std::uint32_t                          block_index   = 0;
+    std::uint16_t                          flags         = 0;
+    std::uint32_t                          texture_count = 0;
+    std::array<NifTextureSlotInventory, 9> standard_slots;
+    std::uint32_t                          shader_texture_count = 0;
+    std::vector<NifShaderTextureInventory> shader_textures;
+};
+
+struct NifSourceTextureInventory
+{
+    std::uint32_t block_index         = 0;
+    std::uint8_t  use_external        = 0;
+    std::uint32_t file_name_index     = UINT32_MAX;
+    std::uint32_t pixel_data          = UINT32_MAX;
+    std::uint32_t pixel_layout        = 0;
+    std::uint32_t use_mipmaps         = 0;
+    std::uint32_t alpha_format        = 0;
+    std::uint8_t  is_static           = 0;
+    std::uint8_t  direct_render       = 0;
+    std::uint8_t  persist_render_data = 0;
+
+    [[nodiscard]] bool IsSupportedExternalSource() const noexcept
+    {
+        return use_external == 1 && file_name_index != UINT32_MAX && pixel_data == UINT32_MAX;
+    }
+};
+
 struct NifTriShape
 {
     std::uint32_t   block_index = 0;
@@ -95,19 +175,22 @@ struct NifTriShapeDataInventory
 
 struct NifDocument
 {
-    std::uint32_t                         version           = 0;
-    std::uint8_t                          endian            = 0;
-    std::uint32_t                         user_version      = 0;
-    std::size_t                           header_size       = 0;
-    std::uint32_t                         max_string_length = 0;
-    std::vector<std::vector<std::byte>>   block_types;
-    std::vector<NifBlock>                 blocks;
-    std::vector<std::vector<std::byte>>   strings;
-    std::vector<std::uint32_t>            groups;
-    std::vector<std::uint32_t>            roots;
-    std::vector<NifNode>                  nodes;
-    std::vector<NifTriShape>              tri_shapes;
-    std::vector<NifTriShapeDataInventory> tri_shape_data;
+    std::uint32_t                              version           = 0;
+    std::uint8_t                               endian            = 0;
+    std::uint32_t                              user_version      = 0;
+    std::size_t                                header_size       = 0;
+    std::uint32_t                              max_string_length = 0;
+    std::vector<std::vector<std::byte>>        block_types;
+    std::vector<NifBlock>                      blocks;
+    std::vector<std::vector<std::byte>>        strings;
+    std::vector<std::uint32_t>                 groups;
+    std::vector<std::uint32_t>                 roots;
+    std::vector<NifNode>                       nodes;
+    std::vector<NifTriShape>                   tri_shapes;
+    std::vector<NifTriShapeDataInventory>      tri_shape_data;
+    std::vector<NifMaterialPropertyInventory>  material_properties;
+    std::vector<NifTexturingPropertyInventory> texturing_properties;
+    std::vector<NifSourceTextureInventory>     source_textures;
 };
 
 [[nodiscard]] std::string_view NifDocumentErrorMessage(NifDocumentError error);

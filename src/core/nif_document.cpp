@@ -11,8 +11,11 @@ namespace rerevved::studio
 namespace
 {
 
-constexpr std::string_view kHeader  = "Gamebryo File Format, Version 20.3.0.9\n";
-constexpr std::uint32_t    kVersion = 0x14030009;
+constexpr std::string_view kHeader                   = "Gamebryo File Format, Version 20.3.0.9\n";
+constexpr std::uint32_t    kVersion                  = 0x14030009;
+constexpr std::size_t      kStandardTextureSlotCount = 9;
+constexpr std::size_t      kBumpTextureSlot          = 5;
+constexpr std::size_t      kParallaxTextureSlot      = 7;
 
 bool CanRead(std::span<const std::byte> bytes, std::size_t offset, std::size_t count)
 {
@@ -218,6 +221,22 @@ bool ReadSignedValues(std::span<const std::byte> bytes,
     return true;
 }
 
+bool ParseObjectNet(std::span<const std::byte>  bytes,
+                    std::size_t&                offset,
+                    std::size_t                 block_count,
+                    std::size_t                 string_count,
+                    std::uint32_t&              name_index,
+                    std::vector<std::uint32_t>& extra_data,
+                    std::uint32_t&              controller)
+{
+    std::uint32_t count = 0;
+    return ReadBlockU32(bytes, offset, name_index) &&
+           IsValidStringIndex(name_index, string_count) &&
+           ReadBlockU32(bytes, offset, count) &&
+           ReadReferences(bytes, offset, count, block_count, extra_data) &&
+           ReadReference(bytes, offset, block_count, controller);
+}
+
 bool ParseAvObject(std::span<const std::byte> bytes,
                    std::size_t&               offset,
                    std::size_t                block_count,
@@ -225,11 +244,13 @@ bool ParseAvObject(std::span<const std::byte> bytes,
                    NifAvObject&               object)
 {
     std::uint32_t count = 0;
-    if (!ReadBlockU32(bytes, offset, object.name_index) ||
-        !IsValidStringIndex(object.name_index, string_count) ||
-        !ReadBlockU32(bytes, offset, count) ||
-        !ReadReferences(bytes, offset, count, block_count, object.extra_data) ||
-        !ReadReference(bytes, offset, block_count, object.controller) ||
+    if (!ParseObjectNet(bytes,
+                        offset,
+                        block_count,
+                        string_count,
+                        object.name_index,
+                        object.extra_data,
+                        object.controller) ||
         !ReadBlockU16(bytes, offset, object.flags))
         return false;
 
@@ -291,6 +312,178 @@ bool ParseTriShape(std::span<const std::byte> bytes,
         return false;
     shape.material.active_material = std::bit_cast<std::int32_t>(active_material);
     return true;
+}
+
+bool ParseMaterialProperty(std::span<const std::byte>    bytes,
+                           std::uint32_t                 block_index,
+                           std::size_t                   block_count,
+                           std::size_t                   string_count,
+                           NifMaterialPropertyInventory& material)
+{
+    std::size_t                offset     = 0;
+    std::uint32_t              name_index = 0;
+    std::vector<std::uint32_t> extra_data;
+    std::uint32_t              controller = 0;
+    material.block_index                  = block_index;
+    if (!ParseObjectNet(bytes,
+                        offset,
+                        block_count,
+                        string_count,
+                        name_index,
+                        extra_data,
+                        controller))
+        return false;
+
+    for (auto* color : { &material.ambient_color,
+                         &material.diffuse_color,
+                         &material.specular_color,
+                         &material.emissive_color })
+    {
+        for (auto& component : *color)
+        {
+            if (!ReadBlockF32(bytes, offset, component))
+                return false;
+        }
+    }
+    return ReadBlockF32(bytes, offset, material.glossiness) &&
+           ReadBlockF32(bytes, offset, material.alpha) && offset == bytes.size();
+}
+
+bool ParseTextureTransform(std::span<const std::byte>    bytes,
+                           std::size_t&                  offset,
+                           NifTextureTransformInventory& transform)
+{
+    for (auto& component : transform.translation)
+    {
+        if (!ReadBlockF32(bytes, offset, component))
+            return false;
+    }
+    for (auto& component : transform.scale)
+    {
+        if (!ReadBlockF32(bytes, offset, component))
+            return false;
+    }
+    if (!ReadBlockF32(bytes, offset, transform.rotation) ||
+        !ReadBlockU32(bytes, offset, transform.transform_method))
+        return false;
+    for (auto& component : transform.center)
+    {
+        if (!ReadBlockF32(bytes, offset, component))
+            return false;
+    }
+    return true;
+}
+
+bool ParseTexDesc(std::span<const std::byte> bytes,
+                  std::size_t&               offset,
+                  std::size_t                block_count,
+                  NifTexDescInventory&       descriptor)
+{
+    if (!ReadReference(bytes, offset, block_count, descriptor.source) ||
+        !ReadBlockU16(bytes, offset, descriptor.flags) ||
+        !ReadBlockU8(bytes, offset, descriptor.has_texture_transform))
+        return false;
+    if (descriptor.has_texture_transform == 1)
+        return ParseTextureTransform(bytes, offset, descriptor.transform.emplace());
+    return true;
+}
+
+bool ParseTexturingProperty(std::span<const std::byte>     bytes,
+                            std::uint32_t                  block_index,
+                            std::size_t                    block_count,
+                            std::size_t                    string_count,
+                            NifTexturingPropertyInventory& property)
+{
+    std::size_t                offset     = 0;
+    std::uint32_t              name_index = 0;
+    std::vector<std::uint32_t> extra_data;
+    std::uint32_t              controller = 0;
+    property.block_index                  = block_index;
+    if (!ParseObjectNet(bytes,
+                        offset,
+                        block_count,
+                        string_count,
+                        name_index,
+                        extra_data,
+                        controller) ||
+        !ReadBlockU16(bytes, offset, property.flags) ||
+        !ReadBlockU32(bytes, offset, property.texture_count) ||
+        property.texture_count != kStandardTextureSlotCount)
+        return false;
+
+    for (std::size_t slot_index = 0; slot_index < property.standard_slots.size();
+         ++slot_index)
+    {
+        auto& slot = property.standard_slots[slot_index];
+        if (!ReadBlockU8(bytes, offset, slot.presence))
+            return false;
+        if (slot.presence != 1)
+            continue;
+        if (!ParseTexDesc(bytes, offset, block_count, slot.descriptor.emplace()))
+            return false;
+        if (slot_index == kBumpTextureSlot)
+        {
+            auto& bump = slot.bump.emplace();
+            if (!ReadBlockF32(bytes, offset, bump.luma_scale) ||
+                !ReadBlockF32(bytes, offset, bump.luma_offset))
+                return false;
+            for (auto& component : bump.bump_matrix)
+            {
+                if (!ReadBlockF32(bytes, offset, component))
+                    return false;
+            }
+        }
+        else if (slot_index == kParallaxTextureSlot &&
+                 !ReadBlockF32(bytes, offset, slot.parallax_offset.emplace()))
+            return false;
+    }
+
+    if (!ReadBlockU32(bytes, offset, property.shader_texture_count) ||
+        !CanReadArray(bytes, offset, property.shader_texture_count, 1))
+        return false;
+    property.shader_textures.reserve(property.shader_texture_count);
+    for (std::uint32_t index = 0; index < property.shader_texture_count; ++index)
+    {
+        NifShaderTextureInventory shader{};
+        if (!ReadBlockU8(bytes, offset, shader.has_map))
+            return false;
+        if (shader.has_map == 1 &&
+            (!ParseTexDesc(bytes, offset, block_count, shader.descriptor.emplace()) ||
+             !ReadBlockU32(bytes, offset, shader.map_id.emplace())))
+            return false;
+        property.shader_textures.push_back(std::move(shader));
+    }
+    return offset == bytes.size();
+}
+
+bool ParseSourceTexture(std::span<const std::byte> bytes,
+                        std::uint32_t              block_index,
+                        std::size_t                block_count,
+                        std::size_t                string_count,
+                        NifSourceTextureInventory& source)
+{
+    std::size_t                offset     = 0;
+    std::uint32_t              name_index = 0;
+    std::vector<std::uint32_t> extra_data;
+    std::uint32_t              controller = 0;
+    source.block_index                    = block_index;
+    return ParseObjectNet(bytes,
+                          offset,
+                          block_count,
+                          string_count,
+                          name_index,
+                          extra_data,
+                          controller) &&
+           ReadBlockU8(bytes, offset, source.use_external) &&
+           ReadBlockU32(bytes, offset, source.file_name_index) &&
+           IsValidStringIndex(source.file_name_index, string_count) &&
+           ReadReference(bytes, offset, block_count, source.pixel_data) &&
+           ReadBlockU32(bytes, offset, source.pixel_layout) &&
+           ReadBlockU32(bytes, offset, source.use_mipmaps) &&
+           ReadBlockU32(bytes, offset, source.alpha_format) &&
+           ReadBlockU8(bytes, offset, source.is_static) &&
+           ReadBlockU8(bytes, offset, source.direct_render) &&
+           ReadBlockU8(bytes, offset, source.persist_render_data) && offset == bytes.size();
 }
 
 bool ParseTriShapeData(std::span<const std::byte> bytes,
@@ -560,6 +753,39 @@ ParseNifDocument(std::span<const std::byte> bytes)
             if (!ParseTriShapeData(payload, block_index, document.blocks.size(), data))
                 return std::unexpected(NifDocumentError::invalid_layout);
             document.tri_shape_data.push_back(std::move(data));
+        }
+        else if (Equals(block_type, "NiMaterialProperty"))
+        {
+            NifMaterialPropertyInventory material{};
+            if (!ParseMaterialProperty(payload,
+                                       block_index,
+                                       document.blocks.size(),
+                                       document.strings.size(),
+                                       material))
+                return std::unexpected(NifDocumentError::invalid_layout);
+            document.material_properties.push_back(std::move(material));
+        }
+        else if (Equals(block_type, "NiTexturingProperty"))
+        {
+            NifTexturingPropertyInventory property{};
+            if (!ParseTexturingProperty(payload,
+                                        block_index,
+                                        document.blocks.size(),
+                                        document.strings.size(),
+                                        property))
+                return std::unexpected(NifDocumentError::invalid_layout);
+            document.texturing_properties.push_back(std::move(property));
+        }
+        else if (Equals(block_type, "NiSourceTexture"))
+        {
+            NifSourceTextureInventory source{};
+            if (!ParseSourceTexture(payload,
+                                    block_index,
+                                    document.blocks.size(),
+                                    document.strings.size(),
+                                    source))
+                return std::unexpected(NifDocumentError::invalid_layout);
+            document.source_textures.push_back(std::move(source));
         }
     }
 

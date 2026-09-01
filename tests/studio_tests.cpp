@@ -12,6 +12,7 @@
 #include "map_document.h"
 #include "mp3_document.h"
 #include "nif_document.h"
+#include "nif_inspector_format.h"
 #include "nif_model.h"
 #include "nif_preview.h"
 #include "synthetic_mp3.h"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1021,6 +1023,286 @@ SyntheticModelNif MakeSyntheticModelNif()
     AppendU32Be(bytes, 1);
     result.root_reference_offset = bytes.size();
     AppendU32Be(bytes, 0);
+    return result;
+}
+
+constexpr std::array<std::uint32_t, 14> kSyntheticMaterialBitsA{
+    0x3FA00000,
+    0xC0200000,
+    0x40700000,
+    0xC0900000,
+    0x40A80000,
+    0xC0D80000,
+    0x00000000,
+    0x80000000,
+    0x7FC12345,
+    0x7F800000,
+    0xFF800000,
+    0x00000001,
+    0x40F00000,
+    0xC1040000,
+};
+
+constexpr std::array<std::uint32_t, 14> kSyntheticMaterialBitsB{
+    0x41200000,
+    0x41300000,
+    0x41400000,
+    0x41500000,
+    0x41600000,
+    0x41700000,
+    0x41800000,
+    0x41880000,
+    0x41900000,
+    0x41980000,
+    0x41A00000,
+    0x41A80000,
+    0x41B00000,
+    0x41B80000,
+};
+
+void AppendSyntheticMaterialProperty(std::vector<std::byte>&              bytes,
+                                     std::uint32_t                        name_index,
+                                     const std::array<std::uint32_t, 14>& bits)
+{
+    AppendSyntheticObjectNet(bytes, name_index);
+    for (const auto value : bits)
+        AppendU32Be(bytes, value);
+}
+
+struct SyntheticMaterialNif
+{
+    std::vector<std::byte>     bytes;
+    std::array<std::size_t, 2> block_size_offsets{};
+    std::array<std::size_t, 2> payload_offsets{};
+};
+
+SyntheticMaterialNif MakeSyntheticMaterialNif()
+{
+    SyntheticMaterialNif                  result{};
+    std::array<std::vector<std::byte>, 2> materials;
+    AppendSyntheticMaterialProperty(materials[0], 0, kSyntheticMaterialBitsA);
+    AppendSyntheticMaterialProperty(materials[1], 1, kSyntheticMaterialBitsB);
+
+    auto&      bytes  = result.bytes;
+    const auto header = ByteString("Gamebryo File Format, Version 20.3.0.9\n");
+    bytes.insert(bytes.end(), header.begin(), header.end());
+    AppendU32Le(bytes, 0x14030009);
+    bytes.push_back(std::byte{ 0 });
+    AppendU32Le(bytes, 0);
+    AppendU32Le(bytes, 2);
+    AppendU16Be(bytes, 1);
+    AppendNifSizedBytes(bytes, ByteString("NiMaterialProperty"));
+    AppendU16Be(bytes, 0);
+    AppendU16Be(bytes, 0);
+    for (std::size_t index = 0; index < materials.size(); ++index)
+    {
+        result.block_size_offsets[index] = bytes.size();
+        AppendU32Be(bytes, static_cast<std::uint32_t>(materials[index].size()));
+    }
+    AppendU32Be(bytes, 2);
+    AppendU32Be(bytes, 18);
+    AppendNifSizedBytes(bytes, ByteString("SyntheticMaterialA"));
+    AppendNifSizedBytes(bytes, ByteString("SyntheticMaterialB"));
+    AppendU32Be(bytes, 0);
+    for (std::size_t index = 0; index < materials.size(); ++index)
+    {
+        result.payload_offsets[index] = bytes.size();
+        bytes.insert(bytes.end(), materials[index].begin(), materials[index].end());
+    }
+    AppendU32Be(bytes, 0);
+    return result;
+}
+
+std::size_t
+AppendSyntheticTexDesc(std::vector<std::byte>&           bytes,
+                       std::uint32_t                     source,
+                       std::uint16_t                     flags,
+                       std::uint8_t                      has_texture_transform,
+                       std::span<const std::uint32_t, 8> transform_bits)
+{
+    const auto source_offset = bytes.size();
+    AppendU32Be(bytes, source);
+    AppendU16Be(bytes, flags);
+    bytes.push_back(static_cast<std::byte>(has_texture_transform));
+    if (has_texture_transform == 1)
+    {
+        for (const auto bits : transform_bits)
+            AppendU32Be(bytes, bits);
+    }
+    return source_offset;
+}
+
+struct SyntheticTextureNif
+{
+    std::vector<std::byte>     bytes;
+    std::array<std::size_t, 5> block_size_offsets{};
+    std::array<std::size_t, 5> payload_offsets{};
+    std::array<std::size_t, 5> payload_sizes{};
+    std::size_t                first_property_name_offset       = 0;
+    std::size_t                first_property_controller_offset = 0;
+    std::size_t                texture_count_offset             = 0;
+    std::array<std::size_t, 6> descriptor_source_offsets{};
+    std::size_t                shader_count_offset = 0;
+    std::array<std::size_t, 2> source_name_offsets{};
+    std::array<std::size_t, 2> source_pixel_offsets{};
+    std::array<std::size_t, 2> source_derived_offsets{};
+};
+
+SyntheticTextureNif MakeSyntheticTextureNif()
+{
+    constexpr std::array<std::uint32_t, 8> kTransformBitsA{
+        0x00000000,
+        0x80000000,
+        0x7F800000,
+        0xFF800000,
+        0x7FC12345,
+        0xA5A5A5A5,
+        0x3F000000,
+        0xBF000000,
+    };
+    constexpr std::array<std::uint32_t, 8> kTransformBitsB{
+        0x3F800000,
+        0x40000000,
+        0x40400000,
+        0x40800000,
+        0x40A00000,
+        0x12345678,
+        0x40C00000,
+        0x40E00000,
+    };
+    constexpr std::array<std::uint32_t, 6> kBumpBits{
+        0x80000000,
+        0x7F800000,
+        0xFF800000,
+        0x7FC54321,
+        0x00000001,
+        0xBF800000,
+    };
+
+    SyntheticTextureNif                   result{};
+    std::array<std::vector<std::byte>, 5> payloads;
+
+    auto& first_property              = payloads[0];
+    result.first_property_name_offset = first_property.size();
+    AppendSyntheticObjectNet(first_property, 0xFFFFFFFF);
+    result.first_property_controller_offset = 8;
+    AppendU16Be(first_property, 0xA5F3);
+    result.texture_count_offset = first_property.size();
+    AppendU32Be(first_property, 9);
+
+    first_property.push_back(std::byte{ 1 });
+    result.descriptor_source_offsets[0] =
+        AppendSyntheticTexDesc(first_property, 2, 0xABCD, 1, kTransformBitsA);
+    first_property.push_back(std::byte{ 2 });
+    first_property.push_back(std::byte{ 0 });
+    first_property.push_back(std::byte{ 0x7F });
+    first_property.push_back(std::byte{ 1 });
+    result.descriptor_source_offsets[1] =
+        AppendSyntheticTexDesc(first_property, 3, 0x1020, 2, kTransformBitsA);
+    first_property.push_back(std::byte{ 1 });
+    result.descriptor_source_offsets[2] =
+        AppendSyntheticTexDesc(first_property, 2, 0x3040, 0, kTransformBitsA);
+    for (const auto bits : kBumpBits)
+        AppendU32Be(first_property, bits);
+    first_property.push_back(std::byte{ 0 });
+    first_property.push_back(std::byte{ 1 });
+    result.descriptor_source_offsets[3] =
+        AppendSyntheticTexDesc(first_property, 0xFFFFFFFF, 0x5060, 0, kTransformBitsA);
+    AppendU32Be(first_property, 0x7FC0BEEF);
+    first_property.push_back(std::byte{ 0 });
+
+    result.shader_count_offset = first_property.size();
+    AppendU32Be(first_property, 3);
+    first_property.push_back(std::byte{ 1 });
+    result.descriptor_source_offsets[4] =
+        AppendSyntheticTexDesc(first_property, 2, 0x7080, 0, kTransformBitsA);
+    AppendU32Be(first_property, 0xDEADBEEF);
+    first_property.push_back(std::byte{ 2 });
+    first_property.push_back(std::byte{ 1 });
+    result.descriptor_source_offsets[5] =
+        AppendSyntheticTexDesc(first_property, 3, 0x90A0, 1, kTransformBitsB);
+    AppendU32Be(first_property, 0xCAFEBABE);
+
+    auto& second_property = payloads[1];
+    AppendSyntheticObjectNet(second_property, 0xFFFFFFFF);
+    AppendU16Be(second_property, 0x55AA);
+    AppendU32Be(second_property, 9);
+    for (const auto presence : { 0U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U })
+        second_property.push_back(static_cast<std::byte>(presence));
+    AppendU32Be(second_property, 0);
+
+    auto append_source = [&](std::size_t   index,
+                             std::uint8_t  use_external,
+                             std::uint32_t file_name,
+                             std::uint32_t pixel_data,
+                             std::uint32_t base_value)
+    {
+        auto& source = payloads[index + 2];
+        AppendSyntheticObjectNet(source, 0xFFFFFFFF);
+        result.source_derived_offsets[index] = source.size();
+        source.push_back(static_cast<std::byte>(use_external));
+        result.source_name_offsets[index] = source.size();
+        AppendU32Be(source, file_name);
+        result.source_pixel_offsets[index] = source.size();
+        AppendU32Be(source, pixel_data);
+        AppendU32Be(source, base_value + 0);
+        AppendU32Be(source, base_value + 1);
+        AppendU32Be(source, base_value + 2);
+        source.push_back(std::byte{ 2 });
+        source.push_back(std::byte{ 3 });
+        source.push_back(std::byte{ 4 });
+    };
+    append_source(0, 1, 0, 0xFFFFFFFF, 0x11111110);
+    append_source(1, 0, 0xFFFFFFFF, 4, 0x22222220);
+    payloads[4].push_back(std::byte{ 0xA5 });
+
+    auto&      bytes  = result.bytes;
+    const auto header = ByteString("Gamebryo File Format, Version 20.3.0.9\n");
+    bytes.insert(bytes.end(), header.begin(), header.end());
+    AppendU32Le(bytes, 0x14030009);
+    bytes.push_back(std::byte{ 0 });
+    AppendU32Le(bytes, 0);
+    AppendU32Le(bytes, static_cast<std::uint32_t>(payloads.size()));
+    AppendU16Be(bytes, 3);
+    AppendNifSizedBytes(bytes, ByteString("NiTexturingProperty"));
+    AppendNifSizedBytes(bytes, ByteString("NiSourceTexture"));
+    AppendNifSizedBytes(bytes, ByteString("OpaqueBlock"));
+    for (const auto type : { 0U, 0U, 1U, 1U, 2U })
+        AppendU16Be(bytes, static_cast<std::uint16_t>(type));
+    for (std::size_t index = 0; index < payloads.size(); ++index)
+    {
+        result.block_size_offsets[index] = bytes.size();
+        result.payload_sizes[index]      = payloads[index].size();
+        AppendU32Be(bytes, static_cast<std::uint32_t>(payloads[index].size()));
+    }
+    AppendU32Be(bytes, 1);
+    AppendU32Be(bytes, 20);
+    AppendNifSizedBytes(bytes, ByteString("SyntheticTexture.dds"));
+    AppendU32Be(bytes, 0);
+
+    for (std::size_t index = 0; index < payloads.size(); ++index)
+    {
+        result.payload_offsets[index] = bytes.size();
+        bytes.insert(bytes.end(), payloads[index].begin(), payloads[index].end());
+    }
+    AppendU32Be(bytes, 0);
+
+    const auto rebase = [&](std::size_t& value, std::size_t payload_index)
+    {
+        value += result.payload_offsets[payload_index];
+    };
+    rebase(result.first_property_name_offset, 0);
+    rebase(result.first_property_controller_offset, 0);
+    rebase(result.texture_count_offset, 0);
+    for (auto& value : result.descriptor_source_offsets)
+        rebase(value, 0);
+    rebase(result.shader_count_offset, 0);
+    for (std::size_t index = 0; index < result.source_name_offsets.size(); ++index)
+    {
+        rebase(result.source_name_offsets[index], index + 2);
+        rebase(result.source_pixel_offsets[index], index + 2);
+        rebase(result.source_derived_offsets[index], index + 2);
+    }
     return result;
 }
 
@@ -2125,6 +2407,19 @@ void TestSyntheticModelFixture()
                        3 &&
                    document->blocks[3].size == 68,
                "synthetic NiTriShape property selects the standard NiMaterialProperty block");
+        Expect(document->material_properties.size() == 1 &&
+                   document->material_properties[0].block_index == 3 &&
+                   document->material_properties[0].ambient_color ==
+                       std::array{ 1.0F, 1.0F, 1.0F } &&
+                   document->material_properties[0].diffuse_color ==
+                       std::array{ 1.0F, 1.0F, 1.0F } &&
+                   document->material_properties[0].specular_color ==
+                       std::array{ 0.0F, 0.0F, 0.0F } &&
+                   document->material_properties[0].emissive_color ==
+                       std::array{ 0.0F, 0.0F, 0.0F } &&
+                   document->material_properties[0].glossiness == 1.0F &&
+                   document->material_properties[0].alpha == 1.0F,
+               "material-positive fixture retains the complete material payload");
         Expect(document->tri_shapes[0].object.controller == 0xFFFFFFFF &&
                    document->tri_shapes[0].object.translation ==
                        std::array{ 0.0F, 0.0F, 0.0F } &&
@@ -2236,6 +2531,789 @@ void TestSyntheticModelFixture()
         Expect(!result && result.error() == NifDocumentError::invalid_layout,
                std::string("out-of-range synthetic ") + label + " reference is rejected");
     }
+}
+
+void TestNifMaterialPropertyInventory()
+{
+    using namespace rerevved::studio;
+
+    const auto synthetic = MakeSyntheticMaterialNif();
+    const auto parsed    = ParseNifDocument(synthetic.bytes);
+    Expect(parsed && parsed->material_properties.size() == 2,
+           "multiple synthetic material properties parse and retain in block order");
+    if (parsed && parsed->material_properties.size() == 2)
+    {
+        const auto retained_bits = [](const NifMaterialPropertyInventory& material)
+        {
+            return std::array{
+                std::bit_cast<std::uint32_t>(material.ambient_color[0]),
+                std::bit_cast<std::uint32_t>(material.ambient_color[1]),
+                std::bit_cast<std::uint32_t>(material.ambient_color[2]),
+                std::bit_cast<std::uint32_t>(material.diffuse_color[0]),
+                std::bit_cast<std::uint32_t>(material.diffuse_color[1]),
+                std::bit_cast<std::uint32_t>(material.diffuse_color[2]),
+                std::bit_cast<std::uint32_t>(material.specular_color[0]),
+                std::bit_cast<std::uint32_t>(material.specular_color[1]),
+                std::bit_cast<std::uint32_t>(material.specular_color[2]),
+                std::bit_cast<std::uint32_t>(material.emissive_color[0]),
+                std::bit_cast<std::uint32_t>(material.emissive_color[1]),
+                std::bit_cast<std::uint32_t>(material.emissive_color[2]),
+                std::bit_cast<std::uint32_t>(material.glossiness),
+                std::bit_cast<std::uint32_t>(material.alpha),
+            };
+        };
+
+        Expect(parsed->material_properties[0].block_index == 0 &&
+                   parsed->material_properties[1].block_index == 1,
+               "material inventory identity follows exact source block order");
+        Expect(retained_bits(parsed->material_properties[0]) == kSyntheticMaterialBitsA,
+               "ambient, diffuse, specular, emissive, glossiness, and alpha bits retain exact order");
+        Expect(retained_bits(parsed->material_properties[1]) == kSyntheticMaterialBitsB,
+               "a second material retains independent ordered f32 values");
+        Expect(std::signbit(parsed->material_properties[0].specular_color[1]) &&
+                   std::isnan(parsed->material_properties[0].specular_color[2]) &&
+                   std::isinf(parsed->material_properties[0].emissive_color[0]) &&
+                   std::isinf(parsed->material_properties[0].emissive_color[1]),
+               "signed zero and representative non-finite values remain accepted and unchanged");
+    }
+
+    constexpr std::size_t kObjectNetSize        = 12;
+    constexpr std::size_t kMaterialSize         = 68;
+    const auto            parse_with_first_size = [&](std::size_t retained_size)
+    {
+        auto bytes = synthetic.bytes;
+        WriteU32Be(bytes,
+                   synthetic.block_size_offsets[0],
+                   static_cast<std::uint32_t>(retained_size));
+        bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(
+                                        synthetic.payload_offsets[0] + retained_size),
+                    bytes.begin() + static_cast<std::ptrdiff_t>(
+                                        synthetic.payload_offsets[0] + kMaterialSize));
+        return ParseNifDocument(bytes);
+    };
+
+    bool inherited_truncations_rejected = true;
+    for (const auto retained_size : std::array<std::size_t, 6>{ 0, 3, 4, 7, 8, 11 })
+        inherited_truncations_rejected =
+            inherited_truncations_rejected && !parse_with_first_size(retained_size);
+    Expect(inherited_truncations_rejected,
+           "truncated inherited NiObjectNET fields are rejected within the material block");
+
+    bool derived_boundaries_rejected = true;
+    for (const auto derived_size : std::array<std::size_t, 7>{ 0, 12, 24, 36, 48, 52, 55 })
+        derived_boundaries_rejected =
+            derived_boundaries_rejected &&
+            !parse_with_first_size(kObjectNetSize + derived_size);
+    Expect(derived_boundaries_rejected,
+           "truncation at every material field boundary and within alpha is rejected");
+
+    auto invalid_name = synthetic.bytes;
+    WriteU32Be(invalid_name, synthetic.payload_offsets[0], 2);
+    const auto invalid_name_result = ParseNifDocument(invalid_name);
+    Expect(!invalid_name_result &&
+               invalid_name_result.error() == NifDocumentError::invalid_layout,
+           "out-of-range inherited material name index is rejected");
+
+    auto invalid_controller = synthetic.bytes;
+    WriteU32Be(invalid_controller, synthetic.payload_offsets[0] + 8, 2);
+    const auto invalid_controller_result = ParseNifDocument(invalid_controller);
+    Expect(!invalid_controller_result &&
+               invalid_controller_result.error() == NifDocumentError::invalid_layout,
+           "out-of-range inherited material controller reference is rejected");
+
+    auto oversized_extra_data = synthetic.bytes;
+    WriteU32Be(oversized_extra_data, synthetic.payload_offsets[0] + 4, 0xFFFFFFFF);
+    const auto oversized_extra_data_result = ParseNifDocument(oversized_extra_data);
+    Expect(!oversized_extra_data_result &&
+               oversized_extra_data_result.error() == NifDocumentError::invalid_layout,
+           "oversized inherited material extra-data count is rejected before allocation");
+
+    auto trailing_payload = synthetic.bytes;
+    trailing_payload.insert(
+        trailing_payload.begin() +
+            static_cast<std::ptrdiff_t>(synthetic.payload_offsets[0] + kMaterialSize),
+        std::byte{ 0xA5 });
+    WriteU32Be(trailing_payload,
+               synthetic.block_size_offsets[0],
+               static_cast<std::uint32_t>(kMaterialSize + 1));
+    const auto trailing_payload_result = ParseNifDocument(trailing_payload);
+    Expect(!trailing_payload_result &&
+               trailing_payload_result.error() == NifDocumentError::invalid_layout,
+           "extra NiMaterialProperty payload bytes are rejected by exact consumption");
+
+    const auto model             = MakeSyntheticModelNif();
+    const auto material_positive = ParseNifDocument(model.bytes);
+    Expect(material_positive &&
+               material_positive->tri_shapes[0].object.properties ==
+                   std::vector<std::uint32_t>{ 3 } &&
+               material_positive->material_properties.size() == 1 &&
+               material_positive->material_properties[0].block_index == 3,
+           "material retention does not alter the shape property reference");
+}
+
+void TestNifTextureSourceInventory()
+{
+    using namespace rerevved::studio;
+
+    const auto synthetic = MakeSyntheticTextureNif();
+    Expect(synthetic.bytes == MakeSyntheticTextureNif().bytes,
+           "synthetic texture-source fixture generation is deterministic");
+    const auto parsed = ParseNifDocument(synthetic.bytes);
+    Expect(parsed && parsed->texturing_properties.size() == 2 &&
+               parsed->source_textures.size() == 2,
+           "multiple texturing properties and source textures retain source order");
+    if (parsed && parsed->texturing_properties.size() == 2 &&
+        parsed->source_textures.size() == 2)
+    {
+        const auto&                 first  = parsed->texturing_properties[0];
+        const auto&                 second = parsed->texturing_properties[1];
+        std::array<std::uint8_t, 9> first_presence{};
+        std::array<std::uint8_t, 9> second_presence{};
+        for (std::size_t index = 0; index < first.standard_slots.size(); ++index)
+        {
+            first_presence[index]  = first.standard_slots[index].presence;
+            second_presence[index] = second.standard_slots[index].presence;
+        }
+        Expect(first.block_index == 0 && second.block_index == 1 &&
+                   first.flags == 0xA5F3 && second.flags == 0x55AA &&
+                   first.texture_count == 9 && second.texture_count == 9,
+               "texturing property identity, raw flags, and count retain exact values");
+        Expect(first_presence == std::array<std::uint8_t, 9>{ 1, 2, 0, 0x7F, 1, 1, 0, 1, 0 } &&
+                   second_presence ==
+                       std::array<std::uint8_t, 9>{ 0, 2, 3, 4, 5, 6, 7, 8, 9 },
+               "all nine standard slot presence bytes retain fixed source order");
+        Expect(!first.standard_slots[1].descriptor &&
+                   !first.standard_slots[3].descriptor &&
+                   std::ranges::none_of(second.standard_slots,
+                                        [](const auto& slot)
+                                        {
+                                            return slot.descriptor.has_value();
+                                        }),
+               "standard slot bytes other than exact one consume no descriptor body");
+
+        const auto& base = first.standard_slots[0];
+        Expect(base.descriptor && base.descriptor->source == 2 &&
+                   base.descriptor->flags == 0xABCD &&
+                   base.descriptor->has_texture_transform == 1 &&
+                   base.descriptor->transform,
+               "Base slot retains its source, raw flags, and exact transform presence");
+        if (base.descriptor && base.descriptor->transform)
+        {
+            const auto&      transform = *base.descriptor->transform;
+            const std::array retained_bits{
+                std::bit_cast<std::uint32_t>(transform.translation[0]),
+                std::bit_cast<std::uint32_t>(transform.translation[1]),
+                std::bit_cast<std::uint32_t>(transform.scale[0]),
+                std::bit_cast<std::uint32_t>(transform.scale[1]),
+                std::bit_cast<std::uint32_t>(transform.rotation),
+                transform.transform_method,
+                std::bit_cast<std::uint32_t>(transform.center[0]),
+                std::bit_cast<std::uint32_t>(transform.center[1]),
+            };
+            Expect(retained_bits ==
+                       std::array<std::uint32_t, 8>{ 0x00000000,
+                                                     0x80000000,
+                                                     0x7F800000,
+                                                     0xFF800000,
+                                                     0x7FC12345,
+                                                     0xA5A5A5A5,
+                                                     0x3F000000,
+                                                     0xBF000000 },
+                   "texture transform fields retain exact component order and f32 bits");
+        }
+
+        const auto& glow = first.standard_slots[4];
+        Expect(glow.descriptor && glow.descriptor->source == 3 &&
+                   glow.descriptor->has_texture_transform == 2 &&
+                   !glow.descriptor->transform,
+               "transform bytes other than exact one retain no transform body");
+
+        const auto& bump = first.standard_slots[5];
+        Expect(bump.descriptor && bump.bump && !bump.parallax_offset,
+               "present Bump retains its descriptor and unconditional extension only");
+        if (bump.bump)
+        {
+            const std::array retained_bits{
+                std::bit_cast<std::uint32_t>(bump.bump->luma_scale),
+                std::bit_cast<std::uint32_t>(bump.bump->luma_offset),
+                std::bit_cast<std::uint32_t>(bump.bump->bump_matrix[0]),
+                std::bit_cast<std::uint32_t>(bump.bump->bump_matrix[1]),
+                std::bit_cast<std::uint32_t>(bump.bump->bump_matrix[2]),
+                std::bit_cast<std::uint32_t>(bump.bump->bump_matrix[3]),
+            };
+            Expect(retained_bits ==
+                       std::array<std::uint32_t, 6>{ 0x80000000,
+                                                     0x7F800000,
+                                                     0xFF800000,
+                                                     0x7FC54321,
+                                                     0x00000001,
+                                                     0xBF800000 },
+                   "Bump luma and matrix values retain exact order and f32 bits");
+        }
+
+        const auto& parallax = first.standard_slots[7];
+        Expect(parallax.descriptor && parallax.descriptor->source == UINT32_MAX &&
+                   parallax.parallax_offset &&
+                   std::bit_cast<std::uint32_t>(*parallax.parallax_offset) == 0x7FC0BEEF,
+               "Parallax retains a null source and exact unconditional offset bits");
+
+        Expect(first.shader_texture_count == 3 && first.shader_textures.size() == 3 &&
+                   second.shader_texture_count == 0 && second.shader_textures.empty(),
+               "shader counts control exact ordered retained record sequences");
+        if (first.shader_textures.size() == 3)
+        {
+            Expect(first.shader_textures[0].has_map == 1 &&
+                       first.shader_textures[0].descriptor &&
+                       first.shader_textures[0].map_id == 0xDEADBEEF &&
+                       first.shader_textures[1].has_map == 2 &&
+                       !first.shader_textures[1].descriptor &&
+                       !first.shader_textures[1].map_id &&
+                       first.shader_textures[2].has_map == 1 &&
+                       first.shader_textures[2].descriptor &&
+                       first.shader_textures[2].map_id == 0xCAFEBABE,
+                   "shader presence, optional descriptors, and raw Map IDs retain source order");
+            const auto& shader_transform = first.shader_textures[2].descriptor->transform;
+            if (shader_transform)
+            {
+                const std::array retained_bits{
+                    std::bit_cast<std::uint32_t>(shader_transform->translation[0]),
+                    std::bit_cast<std::uint32_t>(shader_transform->translation[1]),
+                    std::bit_cast<std::uint32_t>(shader_transform->scale[0]),
+                    std::bit_cast<std::uint32_t>(shader_transform->scale[1]),
+                    std::bit_cast<std::uint32_t>(shader_transform->rotation),
+                    shader_transform->transform_method,
+                    std::bit_cast<std::uint32_t>(shader_transform->center[0]),
+                    std::bit_cast<std::uint32_t>(shader_transform->center[1]),
+                };
+                Expect(retained_bits ==
+                           std::array<std::uint32_t, 8>{ 0x3F800000,
+                                                         0x40000000,
+                                                         0x40400000,
+                                                         0x40800000,
+                                                         0x40A00000,
+                                                         0x12345678,
+                                                         0x40C00000,
+                                                         0x40E00000 },
+                       "a shader descriptor retains an independent ordered transform");
+            }
+        }
+
+        const auto& external = parsed->source_textures[0];
+        const auto& opaque   = parsed->source_textures[1];
+        Expect(external.block_index == 2 && external.use_external == 1 &&
+                   external.file_name_index == 0 && external.pixel_data == UINT32_MAX &&
+                   external.pixel_layout == 0x11111110 &&
+                   external.use_mipmaps == 0x11111111 &&
+                   external.alpha_format == 0x11111112 && external.is_static == 2 &&
+                   external.direct_render == 3 && external.persist_render_data == 4,
+               "external source retains its exact 24-byte ordered payload");
+        Expect(external.IsSupportedExternalSource(),
+               "only the exact validated external carrier combination is supported");
+        Expect(opaque.block_index == 3 && opaque.use_external == 0 &&
+                   opaque.file_name_index == UINT32_MAX && opaque.pixel_data == 4 &&
+                   opaque.pixel_layout == 0x22222220 &&
+                   opaque.use_mipmaps == 0x22222221 &&
+                   opaque.alpha_format == 0x22222222 && !opaque.IsSupportedExternalSource(),
+               "a structurally valid opaque pixel-data carrier remains unsupported");
+        Expect(synthetic.payload_sizes[2] -
+                           (synthetic.source_derived_offsets[0] - synthetic.payload_offsets[2]) ==
+                       24 &&
+                   synthetic.payload_sizes[3] -
+                           (synthetic.source_derived_offsets[1] -
+                            synthetic.payload_offsets[3]) ==
+                       24,
+               "each synthetic NiSourceTexture derived payload is exactly 24 bytes");
+    }
+
+    const auto parse_truncated_block = [&](std::size_t block_index, std::size_t retained_size)
+    {
+        auto bytes = synthetic.bytes;
+        WriteU32Be(bytes,
+                   synthetic.block_size_offsets[block_index],
+                   static_cast<std::uint32_t>(retained_size));
+        bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(
+                                        synthetic.payload_offsets[block_index] + retained_size),
+                    bytes.begin() + static_cast<std::ptrdiff_t>(
+                                        synthetic.payload_offsets[block_index] +
+                                        synthetic.payload_sizes[block_index]));
+        return ParseNifDocument(bytes);
+    };
+
+    bool property_truncations_rejected = true;
+    for (std::size_t retained_size = 0; retained_size < synthetic.payload_sizes[0];
+         ++retained_size)
+        property_truncations_rejected =
+            property_truncations_rejected && !parse_truncated_block(0, retained_size);
+    Expect(property_truncations_rejected,
+           "every truncated inherited, fixed, and conditional texturing-property prefix is rejected");
+
+    bool source_truncations_rejected = true;
+    for (std::size_t source_index = 0; source_index < 2; ++source_index)
+    {
+        for (std::size_t retained_size = 0;
+             retained_size < synthetic.payload_sizes[source_index + 2];
+             ++retained_size)
+            source_truncations_rejected =
+                source_truncations_rejected &&
+                !parse_truncated_block(source_index + 2, retained_size);
+    }
+    Expect(source_truncations_rejected,
+           "every truncated inherited and fixed NiSourceTexture prefix is rejected");
+
+    auto wrong_texture_count = synthetic.bytes;
+    WriteU32Be(wrong_texture_count, synthetic.texture_count_offset, 8);
+    Expect(!ParseNifDocument(wrong_texture_count),
+           "a texturing-property Texture Count other than nine is rejected");
+
+    auto oversized_shader_count = synthetic.bytes;
+    WriteU32Be(oversized_shader_count, synthetic.shader_count_offset, UINT32_MAX);
+    Expect(!ParseNifDocument(oversized_shader_count),
+           "an oversized shader count is rejected before allocation");
+
+    bool all_invalid_descriptor_sources_rejected = true;
+    bool all_null_descriptor_sources_retained    = true;
+    for (const auto source_offset : synthetic.descriptor_source_offsets)
+    {
+        auto invalid_descriptor_source = synthetic.bytes;
+        WriteU32Be(invalid_descriptor_source, source_offset, 5);
+        all_invalid_descriptor_sources_rejected =
+            all_invalid_descriptor_sources_rejected &&
+            !ParseNifDocument(invalid_descriptor_source);
+
+        auto null_descriptor_source = synthetic.bytes;
+        WriteU32Be(null_descriptor_source, source_offset, UINT32_MAX);
+        all_null_descriptor_sources_retained =
+            all_null_descriptor_sources_retained &&
+            ParseNifDocument(null_descriptor_source).has_value();
+    }
+    Expect(all_invalid_descriptor_sources_rejected,
+           "out-of-range standard and shader descriptor source references are rejected");
+    Expect(all_null_descriptor_sources_retained,
+           "null standard and shader descriptor source references are retained");
+
+    auto invalid_source_name = synthetic.bytes;
+    WriteU32Be(invalid_source_name, synthetic.source_name_offsets[0], 1);
+    Expect(!ParseNifDocument(invalid_source_name),
+           "an out-of-range source filename index is rejected");
+    auto null_source_name = synthetic.bytes;
+    WriteU32Be(null_source_name, synthetic.source_name_offsets[0], UINT32_MAX);
+    const auto null_name_result = ParseNifDocument(null_source_name);
+    Expect(null_name_result && !null_name_result->source_textures[0].IsSupportedExternalSource(),
+           "a null source filename remains structurally valid but unsupported");
+
+    auto invalid_pixel_reference = synthetic.bytes;
+    WriteU32Be(invalid_pixel_reference, synthetic.source_pixel_offsets[1], 5);
+    Expect(!ParseNifDocument(invalid_pixel_reference),
+           "an out-of-range source pixel-data reference is rejected");
+    auto null_pixel_reference = synthetic.bytes;
+    WriteU32Be(null_pixel_reference, synthetic.source_pixel_offsets[1], UINT32_MAX);
+    Expect(ParseNifDocument(null_pixel_reference).has_value(),
+           "a null source pixel-data reference is retained");
+
+    auto external_with_pixel = synthetic.bytes;
+    WriteU32Be(external_with_pixel, synthetic.source_pixel_offsets[0], 4);
+    const auto external_with_pixel_result = ParseNifDocument(external_with_pixel);
+    Expect(external_with_pixel_result &&
+               !external_with_pixel_result->source_textures[0].IsSupportedExternalSource(),
+           "Use External one with a non-null Pixel Data reference remains unsupported");
+
+    auto unsupported_external_value                                 = synthetic.bytes;
+    unsupported_external_value[synthetic.source_derived_offsets[0]] = std::byte{ 2 };
+    const auto unsupported_external_result                          = ParseNifDocument(unsupported_external_value);
+    Expect(unsupported_external_result &&
+               unsupported_external_result->source_textures[0].use_external == 2 &&
+               !unsupported_external_result->source_textures[0].IsSupportedExternalSource(),
+           "a raw Use External byte other than exact one remains unsupported");
+
+    auto invalid_property_name = synthetic.bytes;
+    WriteU32Be(invalid_property_name, synthetic.first_property_name_offset, 1);
+    Expect(!ParseNifDocument(invalid_property_name),
+           "an invalid inherited texturing-property name index is rejected");
+    auto invalid_property_controller = synthetic.bytes;
+    WriteU32Be(invalid_property_controller, synthetic.first_property_controller_offset, 5);
+    Expect(!ParseNifDocument(invalid_property_controller),
+           "an invalid inherited texturing-property controller reference is rejected");
+    auto oversized_property_extra_data = synthetic.bytes;
+    WriteU32Be(oversized_property_extra_data,
+               synthetic.first_property_name_offset + 4,
+               UINT32_MAX);
+    Expect(!ParseNifDocument(oversized_property_extra_data),
+           "an oversized inherited texturing-property extra-data count is rejected");
+
+    auto invalid_source_controller = synthetic.bytes;
+    WriteU32Be(invalid_source_controller, synthetic.payload_offsets[2] + 8, 5);
+    Expect(!ParseNifDocument(invalid_source_controller),
+           "an invalid inherited source-texture controller reference is rejected");
+    auto oversized_source_extra_data = synthetic.bytes;
+    WriteU32Be(oversized_source_extra_data, synthetic.payload_offsets[2] + 4, UINT32_MAX);
+    Expect(!ParseNifDocument(oversized_source_extra_data),
+           "an oversized inherited source-texture extra-data count is rejected");
+
+    auto trailing_property = synthetic.bytes;
+    trailing_property.insert(
+        trailing_property.begin() + static_cast<std::ptrdiff_t>(
+                                        synthetic.payload_offsets[0] +
+                                        synthetic.payload_sizes[0]),
+        std::byte{ 0xA5 });
+    WriteU32Be(trailing_property,
+               synthetic.block_size_offsets[0],
+               static_cast<std::uint32_t>(synthetic.payload_sizes[0] + 1));
+    Expect(!ParseNifDocument(trailing_property),
+           "extra texturing-property payload bytes are rejected by exact consumption");
+
+    auto trailing_source = synthetic.bytes;
+    trailing_source.insert(
+        trailing_source.begin() + static_cast<std::ptrdiff_t>(
+                                      synthetic.payload_offsets[2] +
+                                      synthetic.payload_sizes[2]),
+        std::byte{ 0x5A });
+    WriteU32Be(trailing_source,
+               synthetic.block_size_offsets[2],
+               static_cast<std::uint32_t>(synthetic.payload_sizes[2] + 1));
+    Expect(!ParseNifDocument(trailing_source),
+           "extra source-texture payload bytes are rejected by exact consumption");
+
+    const auto model = ParseNifDocument(MakeSyntheticModelNif().bytes);
+    Expect(model && model->texturing_properties.empty() && model->source_textures.empty() &&
+               model->material_properties.size() == 1 && model->tri_shape_data.size() == 1,
+           "texture-source retention leaves existing model and material parsing unchanged");
+}
+
+void TestNifMaterialInspectorPresentation()
+{
+    using namespace rerevved::studio;
+
+    const auto parsed = ParseNifDocument(MakeSyntheticMaterialNif().bytes);
+    Expect(parsed.has_value(), "synthetic materials parse for Inspector presentation");
+    if (!parsed)
+        return;
+
+    const auto text = FormatNifMaterialProperties(parsed->material_properties);
+    Expect(text.size() == 2 && text[0].heading == "NiMaterialProperty block 0" &&
+               text[1].heading == "NiMaterialProperty block 1",
+           "material Inspector presents every property in source block order");
+    if (text.size() == 2)
+    {
+        Expect(text[0].fields ==
+                   std::array<std::string, 6>{
+                       "Ambient color: 1.25, -2.5, 3.75",
+                       "Diffuse color: -4.5, 5.25, -6.75",
+                       "Specular color: 0, -0, NaN",
+                       "Emissive color: +infinity, -infinity, 1.40129846e-45",
+                       "Glossiness: 7.5",
+                       "Alpha: -8.25",
+                   },
+               "material Inspector preserves exact field, component, and special-value order");
+        Expect(text[1].fields[0] == "Ambient color: 10, 11, 12" &&
+                   text[1].fields[5] == "Alpha: 23",
+               "a second material remains clearly independent and ordered");
+    }
+
+    for (const auto bits : std::array<std::uint32_t, 4>{
+             0x3EAAAAAB, 0x3F800001, 0x00800001, 0x7F7FFFFF })
+    {
+        const auto value      = std::bit_cast<float>(bits);
+        const auto value_text = FormatNifInspectorFloat(value);
+        float      round_trip{};
+        const auto result = std::from_chars(value_text.data(),
+                                            value_text.data() + value_text.size(),
+                                            round_trip,
+                                            std::chars_format::general);
+        Expect(result.ec == std::errc{} && result.ptr == value_text.data() + value_text.size() &&
+                   std::bit_cast<std::uint32_t>(round_trip) == bits,
+               "finite material text round-trips to the exact retained f32 bits");
+    }
+    Expect(FormatNifInspectorFloat(0.0F) == "0" &&
+               FormatNifInspectorFloat(-0.0F) == "-0" &&
+               FormatNifInspectorFloat(std::numeric_limits<float>::infinity()) == "+infinity" &&
+               FormatNifInspectorFloat(-std::numeric_limits<float>::infinity()) == "-infinity" &&
+               FormatNifInspectorFloat(std::numeric_limits<float>::quiet_NaN()) == "NaN",
+           "material Inspector distinguishes signed zero and names infinities and NaN explicitly");
+
+    const NifDocument empty;
+    Expect(FormatNifMaterialProperties(empty.material_properties).empty(),
+           "empty material inventory produces no property presentation sections");
+
+    FpkEntryDocument embedded{ 3, FpkEntryFormat::nif, *parsed };
+    const auto*      embedded_nif         = std::get_if<NifDocument>(&embedded.data);
+    const auto       embedded_text        = embedded_nif
+                                                ? FormatNifMaterialProperties(embedded_nif->material_properties)
+                                                : std::vector<NifMaterialPropertyText>{};
+    bool             presentation_matches = embedded_text.size() == text.size();
+    for (std::size_t index = 0; presentation_matches && index < text.size(); ++index)
+        presentation_matches = embedded_text[index].heading == text[index].heading &&
+                               embedded_text[index].fields == text[index].fields;
+    Expect(embedded_nif && presentation_matches,
+           "direct and explicitly opened archive NIFs share identical material presentation");
+}
+
+void TestNifTextureSourceInspectorPresentation()
+{
+    using namespace rerevved::studio;
+
+    const auto parsed = ParseNifDocument(MakeSyntheticTextureNif().bytes);
+    Expect(parsed.has_value(), "synthetic texture sources parse for Inspector presentation");
+    if (!parsed)
+        return;
+
+    const auto properties = FormatNifTexturingProperties(parsed->texturing_properties);
+    Expect(properties.size() == 2 &&
+               properties[0].heading == "NiTexturingProperty block 0" &&
+               properties[1].heading == "NiTexturingProperty block 1",
+           "texturing properties retain source block order in Inspector presentation");
+    if (properties.size() == 2)
+    {
+        const std::vector<std::string> expected_first{
+            "Flags: 0xA5F3",
+            "Texture Count: 9",
+            "Base presence: 1 (0x01)",
+            "Base descriptor: present",
+            "Base Source block reference: 2 (0x00000002)",
+            "Base descriptor Flags: 0xABCD",
+            "Base Has Texture Transform: 1 (0x01)",
+            "Base Texture Transform: present",
+            "Base Translation X/Y: 0, -0",
+            "Base Scale X/Y: +infinity, -infinity",
+            "Base Rotation: NaN",
+            "Base Transform Method: 2779096485 (0xA5A5A5A5)",
+            "Base Center X/Y: 0.5, -0.5",
+            "Dark presence: 2 (0x02)",
+            "Dark descriptor: absent",
+            "Detail presence: 0 (0x00)",
+            "Detail descriptor: absent",
+            "Gloss presence: 127 (0x7F)",
+            "Gloss descriptor: absent",
+            "Glow presence: 1 (0x01)",
+            "Glow descriptor: present",
+            "Glow Source block reference: 3 (0x00000003)",
+            "Glow descriptor Flags: 0x1020",
+            "Glow Has Texture Transform: 2 (0x02)",
+            "Glow Texture Transform: absent",
+            "Bump presence: 1 (0x01)",
+            "Bump descriptor: present",
+            "Bump Source block reference: 2 (0x00000002)",
+            "Bump descriptor Flags: 0x3040",
+            "Bump Has Texture Transform: 0 (0x00)",
+            "Bump Texture Transform: absent",
+            "Bump Luma Scale: -0",
+            "Bump Luma Offset: +infinity",
+            "Bump Matrix: -infinity, NaN, 1.40129846e-45, -1",
+            "Normal presence: 0 (0x00)",
+            "Normal descriptor: absent",
+            "Parallax presence: 1 (0x01)",
+            "Parallax descriptor: present",
+            "Parallax Source block reference: none (0xFFFFFFFF)",
+            "Parallax descriptor Flags: 0x5060",
+            "Parallax Has Texture Transform: 0 (0x00)",
+            "Parallax Texture Transform: absent",
+            "Parallax Offset: NaN",
+            "Decal 0 presence: 0 (0x00)",
+            "Decal 0 descriptor: absent",
+            "Shader Texture Count: 3",
+            "Shader 1 Has Map: 1 (0x01)",
+            "Shader 1 descriptor: present",
+            "Shader 1 Source block reference: 2 (0x00000002)",
+            "Shader 1 descriptor Flags: 0x7080",
+            "Shader 1 Has Texture Transform: 0 (0x00)",
+            "Shader 1 Texture Transform: absent",
+            "Shader 1 Map ID: 3735928559 (0xDEADBEEF)",
+            "Shader 2 Has Map: 2 (0x02)",
+            "Shader 2 descriptor: absent",
+            "Shader 3 Has Map: 1 (0x01)",
+            "Shader 3 descriptor: present",
+            "Shader 3 Source block reference: 3 (0x00000003)",
+            "Shader 3 descriptor Flags: 0x90A0",
+            "Shader 3 Has Texture Transform: 1 (0x01)",
+            "Shader 3 Texture Transform: present",
+            "Shader 3 Translation X/Y: 1, 2",
+            "Shader 3 Scale X/Y: 3, 4",
+            "Shader 3 Rotation: 5",
+            "Shader 3 Transform Method: 305419896 (0x12345678)",
+            "Shader 3 Center X/Y: 6, 7",
+            "Shader 3 Map ID: 3405691582 (0xCAFEBABE)",
+        };
+        Expect(properties[0].fields == expected_first,
+               "texturing Inspector preserves exact slot, descriptor, extension, and shader order");
+        Expect(properties[1].fields.size() == 21 &&
+                   properties[1].fields[0] == "Flags: 0x55AA" &&
+                   properties[1].fields[2] == "Base presence: 0 (0x00)" &&
+                   properties[1].fields[4] == "Dark presence: 2 (0x02)" &&
+                   properties[1].fields[18] == "Decal 0 presence: 9 (0x09)" &&
+                   properties[1].fields[20] == "Shader Texture Count: 0",
+               "absent descriptors retain raw presence bytes without presentation bodies");
+    }
+
+    const auto has_field = [](const std::vector<std::string>& fields, std::string_view value)
+    {
+        return std::ranges::find(fields, value) != fields.end();
+    };
+    const auto has_field_prefix = [](const std::vector<std::string>& fields,
+                                     std::string_view                prefix)
+    {
+        return std::ranges::any_of(fields,
+                                   [&](const auto& field)
+                                   {
+                                       return field.starts_with(prefix);
+                                   });
+    };
+
+    auto non_selected_slot                                               = *parsed;
+    non_selected_slot.texturing_properties[0].standard_slots[0].presence = 2;
+    const auto non_selected_slot_text =
+        FormatNifTexturingProperties(non_selected_slot.texturing_properties);
+    Expect(has_field(non_selected_slot_text[0].fields, "Base descriptor: absent") &&
+               !has_field_prefix(non_selected_slot_text[0].fields,
+                                 "Base Source block reference"),
+           "a descriptor body is presented only when its raw slot presence equals one");
+
+    auto non_selected_transform = *parsed;
+    non_selected_transform.texturing_properties[0]
+        .standard_slots[0]
+        .descriptor->has_texture_transform = 2;
+    const auto non_selected_transform_text =
+        FormatNifTexturingProperties(non_selected_transform.texturing_properties);
+    Expect(has_field(non_selected_transform_text[0].fields,
+                     "Base Texture Transform: absent") &&
+               !has_field_prefix(non_selected_transform_text[0].fields,
+                                 "Base Translation X/Y"),
+           "transform values are presented only when the raw transform byte equals one");
+
+    auto non_selected_shader                                               = *parsed;
+    non_selected_shader.texturing_properties[0].shader_textures[0].has_map = 2;
+    const auto non_selected_shader_text =
+        FormatNifTexturingProperties(non_selected_shader.texturing_properties);
+    Expect(has_field(non_selected_shader_text[0].fields, "Shader 1 descriptor: absent") &&
+               !has_field_prefix(non_selected_shader_text[0].fields,
+                                 "Shader 1 Source block reference") &&
+               !has_field_prefix(non_selected_shader_text[0].fields, "Shader 1 Map ID"),
+           "shader descriptor and Map ID presentation require raw Has Map equal to one");
+
+    auto unresolved_source                                                         = *parsed;
+    unresolved_source.texturing_properties[0].standard_slots[0].descriptor->source = 77;
+    unresolved_source.source_textures.clear();
+    const auto unresolved_source_text =
+        FormatNifTexturingProperties(unresolved_source.texturing_properties);
+    Expect(has_field(unresolved_source_text[0].fields,
+                     "Base Source block reference: 77 (0x0000004D)"),
+           "descriptor source references remain visible without a retained source inventory");
+
+    const auto sources = FormatNifSourceTextures(*parsed);
+    Expect(sources.size() == 2 && sources[0].heading == "NiSourceTexture block 2" &&
+               sources[1].heading == "NiSourceTexture block 3",
+           "source textures retain source block order in Inspector presentation");
+    if (sources.size() == 2)
+    {
+        Expect(sources[0].fields ==
+                   std::vector<std::string>{
+                       "Use External: 1 (0x01)",
+                       "File Name string index: 0 (0x00000000)",
+                       "File Name bytes: SyntheticTexture.dds",
+                       "Pixel Data block reference: none (0xFFFFFFFF)",
+                       "Pixel Layout: 286331152 (0x11111110)",
+                       "Use Mipmaps: 286331153 (0x11111111)",
+                       "Alpha Format: 286331154 (0x11111112)",
+                       "Is Static: 2 (0x02)",
+                       "Direct Render: 3 (0x03)",
+                       "Persist Render Data: 4 (0x04)",
+                       "Supported external source",
+                   },
+               "supported external source presentation retains exact raw fields and metadata bytes");
+        Expect(sources[1].fields ==
+                   std::vector<std::string>{
+                       "Use External: 0 (0x00)",
+                       "File Name string index: none (0xFFFFFFFF)",
+                       "Pixel Data block reference: 4 (0x00000004)",
+                       "Pixel Layout: 572662304 (0x22222220)",
+                       "Use Mipmaps: 572662305 (0x22222221)",
+                       "Alpha Format: 572662306 (0x22222222)",
+                       "Is Static: 2 (0x02)",
+                       "Direct Render: 3 (0x03)",
+                       "Persist Render Data: 4 (0x04)",
+                       "Unsupported source combination",
+                   },
+               "unsupported source presentation keeps its opaque block reference visible");
+    }
+
+    const std::array printable{ std::byte{ 'A' }, std::byte{ 'z' }, std::byte{ ' ' } };
+    const std::array with_nul{ std::byte{ 'A' }, std::byte{ 0 }, std::byte{ 'B' } };
+    const std::array non_printable{ std::byte{ 0xFF }, std::byte{ '\\' }, std::byte{ 0x1F } };
+    Expect(FormatNifStringBytes(printable) == "Az " && FormatNifStringBytes({}).empty() &&
+               FormatNifStringBytes(with_nul) == "A\\x00B" &&
+               FormatNifStringBytes(non_printable) == "\\xFF\\\\\\x1F",
+           "retained string bytes use safe printable, empty, NUL, slash, and hex escaping");
+
+    NifDocument escaped_document;
+    escaped_document.strings = {
+        {},
+        { std::byte{ 'A' }, std::byte{ 0 }, std::byte{ 'B' } },
+        { std::byte{ 0xFF }, std::byte{ '\\' } },
+    };
+    for (std::uint32_t index = 0; index < escaped_document.strings.size(); ++index)
+    {
+        NifSourceTextureInventory source{};
+        source.block_index     = index;
+        source.use_external    = 1;
+        source.file_name_index = index;
+        escaped_document.source_textures.push_back(source);
+    }
+    const auto escaped_sources = FormatNifSourceTextures(escaped_document);
+    Expect(escaped_sources.size() == 3 &&
+               escaped_sources[0].fields[2] == "File Name bytes: <empty>" &&
+               escaped_sources[1].fields[2] == "File Name bytes: A\\x00B" &&
+               escaped_sources[2].fields[2] == "File Name bytes: \\xFF\\\\" &&
+               escaped_sources[0].fields.back() == "Supported external source",
+           "source metadata displays empty, NUL-containing, and non-printable bytes without path interpretation");
+
+    for (const auto mutation : std::array{ 0, 1, 2 })
+    {
+        auto unsupported = *parsed;
+        if (mutation == 0)
+            unsupported.source_textures[0].use_external = 0;
+        else if (mutation == 1)
+            unsupported.source_textures[0].file_name_index = UINT32_MAX;
+        else
+            unsupported.source_textures[0].pixel_data = 4;
+        const auto unsupported_text = FormatNifSourceTextures(unsupported);
+        Expect(!unsupported_text.empty() &&
+                   unsupported_text[0].fields.back() == "Unsupported source combination",
+               "each unsupported source-carrier combination receives the neutral classification");
+    }
+
+    auto invalid_name                               = *parsed;
+    invalid_name.source_textures[0].file_name_index = 99;
+    const auto invalid_name_text                    = FormatNifSourceTextures(invalid_name);
+    Expect(!has_field_prefix(invalid_name_text[0].fields, "File Name bytes:") &&
+               invalid_name_text[0].fields.back() == "Unsupported source combination",
+           "an out-of-range retained filename index is not dereferenced or classified external");
+
+    const NifDocument empty;
+    Expect(FormatNifTexturingProperties(empty.texturing_properties).empty() &&
+               FormatNifSourceTextures(empty).empty(),
+           "empty texturing and source inventories produce neutral empty presentation inputs");
+
+    FpkEntryDocument embedded{ 7, FpkEntryFormat::nif, *parsed };
+    const auto*      embedded_nif        = std::get_if<NifDocument>(&embedded.data);
+    const auto       embedded_properties = embedded_nif
+                                               ? FormatNifTexturingProperties(
+                                                     embedded_nif->texturing_properties)
+                                               : std::vector<NifTexturingPropertyText>{};
+    const auto       embedded_sources    = embedded_nif ? FormatNifSourceTextures(*embedded_nif)
+                                                        : std::vector<NifSourceTextureText>{};
+    const auto       same_text           = [](const auto& left, const auto& right)
+    {
+        if (left.size() != right.size())
+            return false;
+        for (std::size_t index = 0; index < left.size(); ++index)
+        {
+            if (left[index].heading != right[index].heading ||
+                left[index].fields != right[index].fields)
+                return false;
+        }
+        return true;
+    };
+    Expect(embedded_nif && same_text(properties, embedded_properties) &&
+               same_text(sources, embedded_sources),
+           "direct and explicitly opened archive NIFs share identical texture-source presentation");
 }
 
 void TestNifModelAssembly()
@@ -3715,6 +4793,10 @@ int main()
     TestNifDocument();
     TestNifGeometryInventory();
     TestSyntheticModelFixture();
+    TestNifMaterialPropertyInventory();
+    TestNifTextureSourceInventory();
+    TestNifMaterialInspectorPresentation();
+    TestNifTextureSourceInspectorPresentation();
     TestNifModelAssembly();
     TestNifWireframePreview();
     TestNifWireframeNavigation();

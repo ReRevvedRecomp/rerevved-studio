@@ -77,6 +77,7 @@ add_executable(rerevved-studio
     src/app/main.cpp
     src/app/mp3_preview.cpp
     src/app/nif_inspector.cpp
+    src/app/nif_inspector_format.cpp
     src/app/nif_preview.cpp
     src/app/nif_preview_layout.cpp
 )
@@ -103,6 +104,7 @@ rerevved_studio_enable_warnings(rerevved-studio)
 if(BUILD_TESTING)
     add_executable(rerevved_studio_tests
         src/app/inspection_format.cpp
+        src/app/nif_inspector_format.cpp
         src/app/nif_preview_layout.cpp
         tests/studio_tests.cpp
     )

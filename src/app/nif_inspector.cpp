@@ -1,8 +1,9 @@
 #include "nif_inspector.h"
+#include "nif_inspector_format.h"
 
 #include <imgui.h>
 
-#include <cstdio>
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <vector>
@@ -12,34 +13,11 @@ namespace rerevved::studio
 namespace
 {
 
-std::string FormatBytes(std::span<const std::byte> bytes)
-{
-    std::string result;
-    for (const auto value : bytes)
-    {
-        const auto byte = std::to_integer<unsigned char>(value);
-        if (byte >= 0x20 && byte <= 0x7E && byte != '\\')
-        {
-            result.push_back(static_cast<char>(byte));
-            continue;
-        }
-        if (byte == '\\')
-        {
-            result += "\\\\";
-            continue;
-        }
-        char escaped[5]{};
-        std::snprintf(escaped, sizeof(escaped), "\\x%02X", byte);
-        result += escaped;
-    }
-    return result;
-}
-
 std::string FormatString(const NifDocument& document, std::uint32_t index)
 {
     if (index == std::numeric_limits<std::uint32_t>::max())
         return "<none>";
-    return FormatBytes(document.strings[index]);
+    return FormatNifStringBytes(document.strings[index]);
 }
 
 void DrawReference(std::string_view label, std::uint32_t value)
@@ -93,6 +71,14 @@ void DrawAvObject(const NifDocument& document, const NifAvObject& object)
     DrawReference("Collision object", object.collision_object);
 }
 
+void DrawWrapped(std::string_view text)
+{
+    const auto width = std::max(1.0F, ImGui::GetContentRegionAvail().x);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+    ImGui::TextUnformatted(text.data(), text.data() + text.size());
+    ImGui::PopTextWrapPos();
+}
+
 } // namespace
 
 void DrawNifInspector(const NifDocument* document, std::string_view error)
@@ -128,7 +114,7 @@ void DrawNifInspector(const NifDocument* document, std::string_view error)
     {
         ImGui::Text("%zu: %s (%zu)",
                     index,
-                    FormatBytes(document->block_types[index]).c_str(),
+                    FormatNifStringBytes(document->block_types[index]).c_str(),
                     block_counts[index]);
     }
 
@@ -216,6 +202,45 @@ void DrawNifInspector(const NifDocument* document, std::string_view error)
             ImGui::TreePop();
         }
         ImGui::PopID();
+    }
+
+    ImGui::SeparatorText("Material properties");
+    const auto material_text = FormatNifMaterialProperties(document->material_properties);
+    if (material_text.empty())
+        DrawWrapped("No NiMaterialProperty inventories are retained.");
+    for (std::size_t index = 0; index < material_text.size(); ++index)
+    {
+        if (index != 0)
+            ImGui::Separator();
+        DrawWrapped(material_text[index].heading);
+        for (const auto& field : material_text[index].fields)
+            DrawWrapped(field);
+    }
+
+    ImGui::SeparatorText("Texturing properties");
+    const auto texturing_text = FormatNifTexturingProperties(document->texturing_properties);
+    if (texturing_text.empty())
+        DrawWrapped("No NiTexturingProperty inventories are retained.");
+    for (std::size_t index = 0; index < texturing_text.size(); ++index)
+    {
+        if (index != 0)
+            ImGui::Separator();
+        DrawWrapped(texturing_text[index].heading);
+        for (const auto& field : texturing_text[index].fields)
+            DrawWrapped(field);
+    }
+
+    ImGui::SeparatorText("Source textures");
+    const auto source_text = FormatNifSourceTextures(*document);
+    if (source_text.empty())
+        DrawWrapped("No NiSourceTexture inventories are retained.");
+    for (std::size_t index = 0; index < source_text.size(); ++index)
+    {
+        if (index != 0)
+            ImGui::Separator();
+        DrawWrapped(source_text[index].heading);
+        for (const auto& field : source_text[index].fields)
+            DrawWrapped(field);
     }
 }
 
