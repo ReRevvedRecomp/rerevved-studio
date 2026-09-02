@@ -22,21 +22,6 @@
             }
         },
         {
-            "name": "linux-base",
-            "hidden": true,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang-22",
-                "CMAKE_CXX_COMPILER": "clang++-22"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Linux"
-            }
-        },
-        {
             "name": "win-amd64-debug",
             "displayName": "Windows AMD64 Debug",
             "inherits": "windows-base",
@@ -55,9 +40,17 @@
         {
             "name": "linux-amd64-debug",
             "displayName": "Linux AMD64 Debug",
-            "inherits": "linux-base",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
             "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang-22",
+                "CMAKE_CXX_COMPILER": "clang++-22",
                 "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
             }
         }
     ],

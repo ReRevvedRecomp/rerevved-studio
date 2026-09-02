@@ -30,8 +30,7 @@ jobs:
       - name: Check Windows Debug
         shell: pwsh
         run: |
-          $pythonScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
-          $env:PATH = "$pythonScripts;C:\Program Files\LLVM\bin;$env:PATH"
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           clang --version
           clang-format --version
           .\scripts\verify.ps1 -Preset win-amd64-debug -SkipAppSmoke
@@ -54,9 +53,7 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
-          sudo apt-get install --yes clang-22 lld-22
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-22 220
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-22 220
+          sudo apt-get install --yes clang-22
           sudo apt-get install --yes \
             build-essential libgl1-mesa-dev libwayland-dev libxkbcommon-dev \
             ninja-build xorg-dev xvfb

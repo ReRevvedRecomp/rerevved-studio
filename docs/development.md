@@ -4,7 +4,7 @@ ReRevved Studio is a C++23 CMake project. Build output stays under `out/build/<p
 
 ## Prerequisites
 
-All platforms require:
+All supported platforms require:
 
 - CMake 3.25 or newer
 - Ninja
@@ -26,7 +26,8 @@ Windows presets invoke `clang` and `clang++` from `PATH`. Linux uses `clang-22` 
 
 ## Build and test
 
-From a fresh PowerShell session in the repository root, run:
+From a fresh PowerShell session in the repository root, run these Windows
+presets:
 
 ```powershell
 pwsh -File .\scripts\verify.ps1 -Preset win-amd64-debug

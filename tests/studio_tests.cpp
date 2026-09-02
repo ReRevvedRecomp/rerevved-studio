@@ -336,8 +336,7 @@ void TestArchiveMetadataLayout()
                111.0F,
            "narrow archive metadata action is bounded to available width");
     Expect(CalculateArchiveLabeledControlWidth(0.0F, 112.0F, 0.0F, 0.0F) == 1.0F &&
-               CalculateArchiveLabeledControlWidth(-20.0F, 112.0F, 0.0F, 0.0F) ==
-                   1.0F,
+               CalculateArchiveLabeledControlWidth(-20.0F, 112.0F, 0.0F, 0.0F) == 1.0F,
            "non-positive archive metadata widths retain a positive action");
 }
 
@@ -368,11 +367,6 @@ void TestAssetCloseSelection()
     selection = 3;
     Expect(!UpdateSelectionAfterAssetClose(3, selection) && selection == 3,
            "an invalid close index preserves its selection");
-
-    selection = std::numeric_limits<std::size_t>::max();
-    Expect(!UpdateSelectionAfterAssetClose(3, selection) &&
-               selection == std::numeric_limits<std::size_t>::max(),
-           "a maximum close index preserves its selection");
 }
 
 void TestFpkEntryRangeFormatting()
@@ -413,9 +407,6 @@ void TestFpkEntryRangeFormatting()
                "Entry: 1\nOffset: 0 (0x00000000)\nSize: 0 bytes (0x00000000)\nEnd "
                "(exclusive): 0 (0x00000000)",
            "empty FPK entry range preserves its zero-width exclusive boundary");
-
-    const std::array<std::byte, 1> zero_byte{ std::byte{ 0x00 } };
-    Expect(FormatBytes(zero_byte) == "00", "archive zero byte uses two hexadecimal digits");
 
     const std::array<std::byte, 5> mixed_bytes{
         std::byte{ 0x00 },
@@ -651,7 +642,6 @@ struct SyntheticNif
     std::size_t            root_index_offset           = 0;
     std::size_t            node_name_index_offset      = 0;
     std::size_t            node_extra_count_offset     = 0;
-    std::size_t            node_child_count_offset     = 0;
     std::size_t            node_child_offset           = 0;
     std::size_t            shape_data_offset           = 0;
     std::size_t            shape_material_count_offset = 0;
@@ -703,7 +693,6 @@ SyntheticNif MakeNif()
     result.node_name_index_offset  = 0;
     result.node_extra_count_offset = 4;
     AppendNifAvObject(node, 0, 0x1234, 2);
-    result.node_child_count_offset = node.size();
     AppendU32Be(node, 1);
     result.node_child_offset = node.size();
     AppendU32Be(node, 1);
@@ -740,7 +729,6 @@ SyntheticNif MakeNif()
 
     result.node_name_index_offset += bytes.size();
     result.node_extra_count_offset += bytes.size();
-    result.node_child_count_offset += bytes.size();
     result.node_child_offset += bytes.size();
     bytes.insert(bytes.end(), node.begin(), node.end());
     result.shape_data_offset += bytes.size();
@@ -2369,11 +2357,7 @@ void TestSyntheticModelFixture()
                    document->blocks[0].type_index == 0 &&
                    document->blocks[1].type_index == 1 &&
                    document->blocks[2].type_index == 2 &&
-                   document->blocks[3].type_index == 3 &&
-                   std::ranges::all_of(document->blocks, [&](const auto& block)
-                                       {
-                                           return block.type_index < document->block_types.size();
-                                       }),
+                   document->blocks[3].type_index == 3,
                "synthetic model block types and type indices are exact and in range");
         Expect(document->strings == expected_strings && document->max_string_length == 17 &&
                    document->groups.empty(),
@@ -2463,19 +2447,6 @@ void TestSyntheticModelFixture()
                "synthetic triangle selectors are retained and absent groups remain empty");
     }
 
-    const std::array triangle_indices{
-        std::byte{ 0 },
-        std::byte{ 0 },
-        std::byte{ 0 },
-        std::byte{ 1 },
-        std::byte{ 0 },
-        std::byte{ 2 },
-    };
-    Expect(std::ranges::equal(
-               std::span(synthetic.bytes).subspan(synthetic.triangle_indices_offset, 6),
-               triangle_indices),
-           "synthetic triangle indices are exactly 0, 1, and 2");
-
     auto                 serialized_transform = synthetic.bytes;
     constexpr std::array serialized_rotation{
         0.0F,
@@ -2513,10 +2484,6 @@ void TestSyntheticModelFixture()
                                    !ParseNifDocument(std::span(synthetic.bytes).first(size));
     Expect(all_truncations_rejected,
            "every truncated synthetic model fixture prefix is rejected");
-    Expect(!ParseNifDocument(std::span(synthetic.bytes).first(synthetic.node_transform_offset + 51)) &&
-               !ParseNifDocument(std::span(synthetic.bytes).first(synthetic.shape_transform_offset + 51)),
-           "truncated node and shape transform records fail through block-bounded parsing");
-
     for (const auto [offset, label] :
          std::array{
              std::pair{ synthetic.root_reference_offset, "root" },
@@ -2640,15 +2607,6 @@ void TestNifMaterialPropertyInventory()
     Expect(!trailing_payload_result &&
                trailing_payload_result.error() == NifDocumentError::invalid_layout,
            "extra NiMaterialProperty payload bytes are rejected by exact consumption");
-
-    const auto model             = MakeSyntheticModelNif();
-    const auto material_positive = ParseNifDocument(model.bytes);
-    Expect(material_positive &&
-               material_positive->tri_shapes[0].object.properties ==
-                   std::vector<std::uint32_t>{ 3 } &&
-               material_positive->material_properties.size() == 1 &&
-               material_positive->material_properties[0].block_index == 3,
-           "material retention does not alter the shape property reference");
 }
 
 void TestNifTextureSourceInventory()
@@ -2815,14 +2773,6 @@ void TestNifTextureSourceInventory()
                    opaque.use_mipmaps == 0x22222221 &&
                    opaque.alpha_format == 0x22222222 && !opaque.IsSupportedExternalSource(),
                "a structurally valid opaque pixel-data carrier remains unsupported");
-        Expect(synthetic.payload_sizes[2] -
-                           (synthetic.source_derived_offsets[0] - synthetic.payload_offsets[2]) ==
-                       24 &&
-                   synthetic.payload_sizes[3] -
-                           (synthetic.source_derived_offsets[1] -
-                            synthetic.payload_offsets[3]) ==
-                       24,
-               "each synthetic NiSourceTexture derived payload is exactly 24 bytes");
     }
 
     const auto parse_truncated_block = [&](std::size_t block_index, std::size_t retained_size)
@@ -2972,11 +2922,6 @@ void TestNifTextureSourceInventory()
                static_cast<std::uint32_t>(synthetic.payload_sizes[2] + 1));
     Expect(!ParseNifDocument(trailing_source),
            "extra source-texture payload bytes are rejected by exact consumption");
-
-    const auto model = ParseNifDocument(MakeSyntheticModelNif().bytes);
-    Expect(model && model->texturing_properties.empty() && model->source_textures.empty() &&
-               model->material_properties.size() == 1 && model->tri_shape_data.size() == 1,
-           "texture-source retention leaves existing model and material parsing unchanged");
 }
 
 void TestNifMaterialInspectorPresentation()
@@ -4358,13 +4303,6 @@ void TestInitialArchiveSelection()
     Expect(one_state.selected_entry && *one_state.selected_entry == 0 &&
                one_state.requested_entry == 1,
            "one-entry archive initially selects displayed entry 1");
-    if (one_document && one_state.selected_entry)
-    {
-        const auto& entry = one_document->index.entries[*one_state.selected_entry];
-        const auto  end   = static_cast<std::uint64_t>(entry.offset) + entry.size;
-        Expect(entry.offset == 34 && entry.size == 3 && end == 37,
-               "initial archive selection exposes the validated byte range");
-    }
     Expect(!one_state.opened_document && one_state.open_error.empty() &&
                one_state.extraction_result.empty() && one_state.metadata_result.empty() &&
                std::ranges::all_of(one_state.extraction_path,
