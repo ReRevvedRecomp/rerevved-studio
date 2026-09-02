@@ -21,7 +21,7 @@ Make the narrowest claim supported by the observation. Keep standard format fact
 
 Do not infer guest runtime semantics from an asset layout. Executable analysis
 belongs in `rerevved-research`; runtime behavior belongs in `rerevved` or
-`rerevved-rexglue-sdk` according to ownership.
+`rerevved-sdk` according to ownership.
 
 ## Public boundary
 
