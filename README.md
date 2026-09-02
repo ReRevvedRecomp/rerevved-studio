@@ -17,9 +17,10 @@ The content workbench for ReRevved.
 
 ReRevved Studio lets you browse, inspect, and preview legally owned game content while preserving the original source files. Extraction creates a new destination instead of changing an archive in place.
 
-Studio currently covers inspection, preview, and single-entry extraction. Its
-format support is designed to expand into editing, conversion, validation, and
-export. [ReRevved](https://github.com/ReRevvedRecomp/rerevved) and the SDK
+Studio currently covers inspection, preview, and single-entry extraction.
+Its format support is designed to expand into editing, conversion,
+validation, and export.
+[ReRevved](https://github.com/ReRevvedRecomp/rerevved) and the SDK
 remain responsible for installation, activation, launching, and runtime
 behavior.
 

@@ -55,8 +55,8 @@ ctest --preset win-amd64-debug
 .\out\build\win-amd64-debug\rerevved-studio.exe --smoke-test .\README.md
 ```
 
-Replace the preset consistently for Release. To force CMake to regenerate its
-configure state and rebuild targets:
+Replace the preset consistently for Release.
+To force CMake to regenerate its configure state and rebuild targets:
 
 ```powershell
 cmake --fresh --preset win-amd64-debug

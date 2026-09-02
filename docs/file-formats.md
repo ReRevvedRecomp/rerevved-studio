@@ -91,9 +91,9 @@ The layout and minimum validation follow Microsoft's DDS documentation:
 
 The Studio parser accepts exactly 1088 bytes and preserves them as two separate
 ranges: a 1024-byte map core and a 64-byte footer. Shorter inputs report a
-truncated record. Longer inputs report an unsupported length. The parser does
-not modify the source and does not infer terrain names, validity rules, map
-orientation, or a semantic purpose for the footer.
+truncated record. Longer inputs report an unsupported length.
+The parser does not modify the source and does not infer terrain names, validity
+rules, map orientation, or a semantic purpose for the footer.
 
 The presentation does not assign terrain meaning or player-facing orientation
 to the core bytes, and a non-`0xFF` footer remains structurally inspectable
@@ -121,8 +121,8 @@ The first tag must be Scaleform ExporterInfo tag 1000 with an exporter version
 whose major byte is 2. The parser preserves the raw exporter version, flags,
 bitmap format, prefix bytes, and SWF-name bytes. It then walks standard short
 and long SWF tag records, checks every payload against the declared file
-boundary, and skips tag codes it does not inspect. A zero-length End tag must
-finish exactly at the file boundary.
+boundary, and skips tag codes it does not inspect.
+A zero-length End tag must finish exactly at the file boundary.
 
 Scaleform DefineExternalImage tag 1001 records preserve the character ID, raw
 bitmap format, target dimensions, export-name bytes, and filename bytes. The
@@ -320,8 +320,8 @@ validity rules.
 
 Block payloads not covered above are skipped without interpreting animation,
 skinning, or unsupported scene semantics. Model assembly walks validated footer
-roots and ordered, nested `NiNode` children. Exact
-`NiTriShape` blocks become mesh descriptors only when their data reference
+roots and ordered, nested `NiNode` children.
+Exact `NiTriShape` blocks become mesh descriptors only when their data reference
 resolves to parsed `NiTriShapeData`, positions and triangles are present and
 nonempty, every triangle selector addresses a retained position, and any
 present normal array has the position count. Null references and valid
@@ -345,8 +345,8 @@ presents retained material, texturing, and source inventories as read-only text.
 Presentation does not alter the format contract,
 copy geometry arrays, transform normals, evaluate materials, resolve source
 names, load textures, decode pixel data, or create GPU model resources. Current
-controls, deterministic fitting, numeric formatting, byte escaping, and empty-
-state behavior are documented in the
+controls, deterministic fitting, numeric formatting, byte escaping, and
+empty-state behavior are documented in the
 [User guide](user-guide.md#direct-and-embedded-nif-wireframes).
 
 Studio makes no winding, front-face, handedness, up-axis, or coordinate-space

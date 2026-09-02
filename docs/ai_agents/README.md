@@ -1,8 +1,7 @@
 # Automated and AI-assisted contributions
 
-If automated or AI assistance is used, the work follows the same contribution
-and evidence rules as any other work. The contributor owns every submitted
-claim and must be able to explain its source, scope, and evidence.
+If automated or AI assistance is used, the work follows the same contribution and evidence rules as any other work.
+The contributor owns every submitted claim and must be able to explain its source, scope, and evidence.
 
 Automated output is not file format or runtime evidence. A durable format claim
 starts from a public specification, a documented observation with an explicit

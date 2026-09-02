@@ -18,8 +18,8 @@ closes only that document and releases its preview state. It does not delete or
 change the source file.
 
 Studio identifies FPK, DDS, GFX, BIK, MP3, NIF, and MAP by extension. Other
-regular files receive generic header inspection. Extension recognition does not
-guarantee format parsing or preview support.
+regular files receive generic header inspection.
+Extension recognition does not guarantee format parsing or preview support.
 
 ## Archive Explorer
 
@@ -54,8 +54,8 @@ Studio parses the selected byte range directly from archive memory and does not 
 
 `Close opened entry` releases only the opened embedded document and its preview
 state. The archive, selection, explicit format choice, metadata, extraction
-path, extraction result, and source bytes remain available. The same entry can
-be opened again immediately.
+path, extraction result, and source bytes remain available.
+The same entry can be opened again immediately.
 
 ### Extract one entry
 
@@ -142,8 +142,8 @@ Every retained `NiTexturingProperty` and `NiSourceTexture` appears in source blo
 Source rows show both retained carriers. Printable ASCII filename bytes remain
 literal, backslashes are doubled, and NUL or other non-printable bytes use
 uppercase `\xNN` escapes. This is byte-safe metadata display, not path or URL
-interpretation. Only the exact validated combination of Use External equal to
-one, a valid non-null filename index, and a null Pixel Data reference is labeled
+interpretation. Only the exact validated combination of Use External equal to one,
+a valid non-null filename index, and a null Pixel Data reference is labeled
 `Supported external source`; every other retained combination is labeled
 `Unsupported source combination`.
 
