@@ -30,7 +30,8 @@ jobs:
       - name: Check Windows Debug
         shell: pwsh
         run: |
-          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          $pythonScripts = (python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+          $env:PATH = "$pythonScripts;C:\Program Files\LLVM\bin;$env:PATH"
           clang --version
           clang-format --version
           .\scripts\verify.ps1 -Preset win-amd64-debug -SkipAppSmoke
