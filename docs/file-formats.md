@@ -98,16 +98,12 @@ rules, map orientation, or a semantic purpose for the footer.
 The presentation does not assign terrain meaning or player-facing orientation
 to the core bytes, and a non-`0xFF` footer remains structurally inspectable
 because the available public evidence does not establish a runtime validity
-rule. Grid and
-hover behavior are documented in the
-[User guide](user-guide.md#xbox-dlc-map).
+rule. See the [User guide](user-guide.md#xbox-dlc-map) for grid and hover behavior.
 
-The title's public
-[loader-boundary evidence](https://github.com/ReRevvedRecomp/rerevved-research/blob/c7000069b511a697c7ff4657d45d3b7a885d9960/manifests/map-authoring-loader-boundary.json)
-establishes the 32 by 32 core and its 1024-byte read. It does not establish
-that runtime acceptance requires the footer, that a bare core is valid, or that
-other trailing bytes are tolerated. Tests use only generated synthetic records
-and contain no retail bytes.
+The [public loader-boundary evidence](https://github.com/ReRevvedRecomp/rerevved-research/blob/cddfc1ac6f040595dbdc0247d4566dfb69f10714/manifests/map-authoring-loader-boundary.json) establishes the 32 by 32 core and its 1024-byte read.
+It does not establish that runtime acceptance requires the footer, that a bare core
+is valid, or that other trailing bytes are tolerated.
+Tests use only generated synthetic records and contain no retail bytes.
 
 ## GFX
 
